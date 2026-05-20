@@ -8,7 +8,8 @@ Parameter grid (defaults — 17 280 scenarios)
 ---------------------------------------------
   p              : 3..10              (8 values)
   n_changes      : 1..6               (6 values — n_regimes = n_changes + 1 = 2..7)
-  samples_regime : 500, 2500, 5000    (3 values — exact samples per regime)
+  samples_regime : 500, 2500, 5000    (3 values — MAX samples per regime; each regime
+                                       gets a random size in [MIN_REGIME_SAMPLES, samples_regime])
   base_pconn     : 0.20, 0.35, 0.50, 0.75   (4 values)
   noise_fraction : 0.02, 0.08, 0.20  (3 values — low / medium / high)
   seeds          : 10 per combination
@@ -59,6 +60,8 @@ import itertools
 import numpy as np
 import pandas as pd
 
+MIN_REGIME_SAMPLES = 250  # hard floor on samples per regime
+
 # ── Path setup (mirrors full_pipeline.py) ─────────────────────────────────────
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_HERE, "NSD_Wavelets", "src"))
@@ -106,6 +109,25 @@ def generate_and_save(
     """
     sid = make_scenario_id(p, n_regimes, samples_regime, pconn, noise_fraction, seed)
 
+    if samples_regime < MIN_REGIME_SAMPLES:
+        raise ValueError(
+            f"samples_regime={samples_regime} is below the minimum regime floor "
+            f"({MIN_REGIME_SAMPLES})"
+        )
+
+    # Constrained random partition: sizes are random but sum exactly to
+    # n_regimes * samples_regime, each regime >= MIN_REGIME_SAMPLES.
+    # Uses stars-and-bars on the budget above the per-regime minimum.
+    rng = np.random.default_rng(seed)
+    total_samples = n_regimes * samples_regime
+    budget = total_samples - n_regimes * MIN_REGIME_SAMPLES
+    cuts = sorted(rng.integers(0, budget + 1, size=n_regimes - 1).tolist())
+    boundaries = [0] + cuts + [budget]
+    computed_sizes = [
+        MIN_REGIME_SAMPLES + (boundaries[i + 1] - boundaries[i])
+        for i in range(n_regimes)
+    ]
+
     (
         X,
         true_cps,
@@ -118,12 +140,13 @@ def generate_and_save(
     ) = build_nonstationary_scenario(
         p=p,
         n_regimes=n_regimes,
-        min_samples=samples_regime,
+        min_samples=MIN_REGIME_SAMPLES,
         max_samples=samples_regime,
         base_pconn=pconn,
-        change_pcts=[0, 30, 25, 35, 30],   # accepted but not used by the generator
+        change_pcts=[0, 30, 25, 35, 30],
         seed=seed,
         noise_fraction=noise_fraction,
+        regime_sizes=computed_sizes,
     )
 
     # ── dat.csv: full time series ─────────────────────────────────────────────
@@ -158,8 +181,7 @@ def generate_and_save(
         "change_points":     ";".join(map(str, true_cps)),
         "regime_sizes":      ";".join(map(str, regime_sizes)),
         "variable_names":    ";".join(variable_names),
-        # alias for run_experiments.py min_window calculation
-        "min_samples_regime": samples_regime,
+        "min_samples_regime": MIN_REGIME_SAMPLES,   # floor used; run_experiments uses this for min_window
     }
 
 

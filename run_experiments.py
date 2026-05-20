@@ -1,28 +1,22 @@
 """
-Experiment runner for Full Pipeline — batched edition.
+Experiment runner for Full Pipeline.
 
 Loads pre-generated scenarios from datasets/ (produced by generate_datasets.py),
-runs detection + CausalMorph + DirectLiNGAM + ICA-LiNGAM on each, and saves
-results in batches of --batch_size scenarios.
+runs detection + CausalMorph + DirectLiNGAM + ICA-LiNGAM on each, and writes a
+single results.csv to output_dir only after ALL scenarios complete.
 
-Output layout
--------------
-  {output_dir}/batch_0000.csv   — scenarios 0..batch_size-1
-  {output_dir}/batch_0001.csv   — scenarios batch_size..2*batch_size-1
-  ...
+Output
+------
+  {output_dir}/results.csv   — one row per scenario, all methods side-by-side
 
 Each row includes all three algorithms (CausalMorph, DirectLiNGAM, ICA-LiNGAM)
-side-by-side for direct comparison.
-
-Resuming
---------
-Batches whose CSV already exists are skipped entirely.  Within an in-progress
-batch, completed scenario_ids are skipped.  It is safe to Ctrl-C and re-run.
+plus per-regime SHD columns (cm_shd_0, cm_shd_1, … / directlingam_shd_0, …).
 
 Usage
 -----
-  python run_experiments.py                              # all datasets, batch=100
-  python run_experiments.py --batch_size 50              # smaller batches
+  python run_experiments.py                              # all datasets, auto worker count
+  python run_experiments.py --workers 64                 # explicit parallelism
+  python run_experiments.py --batch_size 50              # smaller progress groups
   python run_experiments.py --p_filter 5                 # only p=5 scenarios
   python run_experiments.py --dataset_dir my_data --output_dir my_results
 """
@@ -35,17 +29,28 @@ import traceback
 import contextlib
 import io
 import warnings
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import numpy as np
 import pandas as pd
 import networkx as nx
 
 warnings.filterwarnings("ignore", category=RuntimeWarning)
+warnings.filterwarnings("ignore", category=UserWarning, module="scipy")
 
 # ── Path setup ─────────────────────────────────────────────────────────────────
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_HERE, "NSD_Wavelets", "src"))
 sys.path.insert(0, os.path.join(_HERE, "causalmorph"))
+
+
+def _init_worker(here_path: str):
+    """Initializer for worker processes: ensures submodule paths are on sys.path."""
+    sys.path.insert(0, os.path.join(here_path, "NSD_Wavelets", "src"))
+    sys.path.insert(0, os.path.join(here_path, "causalmorph"))
+    import warnings
+    warnings.filterwarnings("ignore", category=RuntimeWarning)
+    warnings.filterwarnings("ignore", category=UserWarning, module="scipy")
 
 from full_pipeline import (
     detect_change_points,
@@ -80,7 +85,7 @@ def load_scenario(scenario_id: str, dataset_dir: str, index_row: pd.Series):
 
     true_cps    = [int(x) for x in str(index_row["change_points"]).split(";") if x.strip()]
     regime_sizes = [int(x) for x in str(index_row.get("regime_sizes", "")).split(";") if x.strip()]
-    min_samples  = int(index_row.get("samples_regime") or index_row.get("min_samples_regime") or 600)
+    min_samples  = int(index_row.get("min_samples_regime") or index_row.get("samples_regime") or 600)
 
     am_df = pd.read_csv(os.path.join(dataset_dir, f"{scenario_id}-am.csv"), index_col="from_var")
     true_adjs = []
@@ -156,14 +161,15 @@ def _extract_metrics(
 
     # ── Detection ─────────────────────────────────────────────────────────────
     det = {
-        "det_f1":         round(er.f1_score, 4),
         "det_precision":  round(er.precision, 4),
         "det_recall":     round(er.recall, 4),
         "det_tp":         er.true_positives,
         "det_fp":         er.false_positives,
         "det_fn":         er.false_negatives,
         "n_true_cps":     len(result["true_change_points"]),
+        "true_cps":       ";".join(str(x) for x in result["true_change_points"]),
         "n_detected_cps": len(result["detected_change_points"]),
+        "detected_cps":   ";".join(str(x) for x in result["detected_change_points"]),
         "total_samples":  len(result["X"]),
     }
 
@@ -178,12 +184,14 @@ def _extract_metrics(
             "mean_struct_precision": round(np.mean([m["Precision"]      for m in metrics_list]), 3),
             "mean_struct_recall":    round(np.mean([m["Recall"]         for m in metrics_list]), 3),
         }
+        cm_struct["cm_norm_shd_per_regime"] = ";".join(str(round(m["normalized_shd"], 3)) for m in metrics_list)
     else:
         cm_struct = {k: np.nan for k in (
             "n_structures", "mean_shd", "mean_norm_shd",
             "mean_struct_f1", "mean_struct_precision", "mean_struct_recall",
         )}
-        cm_struct["n_structures"] = len(structs)
+        cm_struct["n_structures"]           = len(structs)
+        cm_struct["cm_norm_shd_per_regime"] = ""
 
     cm_shd = compute_shd(consensus_adj, gt_df)
     cm_consensus = {
@@ -206,9 +214,11 @@ def _extract_metrics(
                 ablation_out[f"{method}_mean_f1"]        = round(np.mean([m["F1"]             for m in metrics_m]), 3)
                 ablation_out[f"{method}_mean_precision"] = round(np.mean([m["Precision"]      for m in metrics_m]), 3)
                 ablation_out[f"{method}_mean_recall"]    = round(np.mean([m["Recall"]         for m in metrics_m]), 3)
+                ablation_out[f"{method}_norm_shd_per_regime"] = ";".join(str(round(m["normalized_shd"], 3)) for m in metrics_m)
             else:
                 for sfx in ("mean_shd", "mean_norm_shd", "mean_f1", "mean_precision", "mean_recall"):
                     ablation_out[f"{method}_{sfx}"] = np.nan
+                ablation_out[f"{method}_norm_shd_per_regime"] = ""
 
             ac = result.get("ablation_consensus", {}).get(method)
             if ac:
@@ -386,7 +396,6 @@ def _print_batch_summary(rows: list, batch_idx: int):
         print(f"  Batch {batch_idx:04d} — no successful rows")
         return
     df = pd.DataFrame(ok_rows)
-    det_f1   = df["det_f1"].mean()   if "det_f1"   in df else float("nan")
     nshd     = df["mean_norm_shd"].mean() if "mean_norm_shd" in df else float("nan")
     cons_f1  = df["consensus_f1"].mean()  if "consensus_f1"  in df else float("nan")
     dl_nshd  = df["directlingam_mean_norm_shd"].mean() if "directlingam_mean_norm_shd" in df else float("nan")
@@ -395,7 +404,6 @@ def _print_batch_summary(rows: list, batch_idx: int):
     n_err = len(rows) - n_ok
     print(
         f"\n  ── Batch {batch_idx:04d} ({n_ok} ok / {n_err} err) ──"
-        f"  det_f1={det_f1:.3f}"
         f"  CM_nSHD={nshd:.3f}  CM_cons_f1={cons_f1:.3f}"
         f"  DL_nSHD={dl_nshd:.3f}"
         f"  ICA_nSHD={ica_nshd:.3f}"
@@ -405,22 +413,18 @@ def _print_batch_summary(rows: list, batch_idx: int):
 # ── Global summary helper ─────────────────────────────────────────────────────
 
 def _print_global_summary(output_dir: str):
-    batch_files = sorted(
-        f for f in os.listdir(output_dir) if f.startswith("batch_") and f.endswith(".csv")
-    )
-    if not batch_files:
+    results_path = os.path.join(output_dir, "results.csv")
+    if not os.path.exists(results_path):
         return
 
-    dfs = [pd.read_csv(os.path.join(output_dir, f)) for f in batch_files]
-    df_all = pd.concat(dfs, ignore_index=True)
+    df_all = pd.read_csv(results_path)
     ok     = df_all[df_all["status"] == "ok"]
 
     print(f"\n{'='*70}")
-    print(f"GLOBAL SUMMARY  ({len(ok)}/{len(df_all)} succeeded  across {len(batch_files)} batches)")
+    print(f"GLOBAL SUMMARY  ({len(ok)}/{len(df_all)} succeeded)")
     print(f"{'='*70}")
 
     cols = [
-        ("det_f1",                     "Detection F1"),
         ("det_precision",              "Detection Precision"),
         ("det_recall",                 "Detection Recall"),
         ("mean_norm_shd",              "CausalMorph  mean nSHD"),
@@ -440,14 +444,13 @@ def _print_global_summary(output_dir: str):
 
     # Per-p table
     if "p" in ok.columns:
-        print(f"\n  {'p':>3}   n   det_f1  CM_nSHD  DL_nSHD  ICA_nSHD  CM_F1  DL_F1  ICA_F1")
-        print(f"  {'─'*70}")
+        print(f"\n  {'p':>3}   n   CM_nSHD  DL_nSHD  ICA_nSHD  CM_F1  DL_F1  ICA_F1")
+        print(f"  {'─'*65}")
         for pval in sorted(ok["p"].astype(str).unique(), key=int):
             sub = ok[ok["p"].astype(str) == pval]
             def m(c): return sub[c].mean() if c in sub else float("nan")
             print(
                 f"  {pval:>3}  {len(sub):>4}"
-                f"  {m('det_f1'):.3f}"
                 f"   {m('mean_norm_shd'):.3f}"
                 f"    {m('directlingam_mean_norm_shd'):.3f}"
                 f"     {m('icalingam_mean_norm_shd'):.3f}"
@@ -465,6 +468,7 @@ def run_experiments(
     dataset_dir: str      = "datasets",
     output_dir: str       = "results",
     batch_size: int       = 100,
+    n_workers: int        = None,
     detector_version: str = "v1G",
     prior_mode: str       = "chain",
     window_overlap: float = 0.0,
@@ -472,10 +476,8 @@ def run_experiments(
     p_filter: int         = None,
 ):
     """
-    Run all scenarios in dataset_dir/index.csv in batches of batch_size.
-
-    Each batch is saved to {output_dir}/batch_{idx:04d}.csv.
-    Completed batches (file exists + all scenarios present) are skipped.
+    Run all scenarios in dataset_dir/index.csv in parallel and write a single
+    results.csv to output_dir only after all scenarios complete.
     """
     index_path = os.path.join(dataset_dir, "index.csv")
     if not os.path.exists(index_path):
@@ -491,99 +493,83 @@ def run_experiments(
 
     scenarios = list(index_df.iterrows())
     total     = len(scenarios)
-    n_batches = (total + batch_size - 1) // batch_size
+
+    if n_workers is None:
+        n_workers = max(1, (os.cpu_count() or 2) // 2)
 
     print("=" * 70)
-    print("Experiment Runner — Full Pipeline (batched)")
+    print("Experiment Runner — Full Pipeline (parallel)")
     print("=" * 70)
     print(f"  dataset_dir : {dataset_dir}/")
     print(f"  output_dir  : {output_dir}/")
     print(f"  detector    : {detector_version}")
     print(f"  prior_mode  : {prior_mode}")
     print(f"  methods     : CausalMorph + DirectLiNGAM + ICA-LiNGAM")
-    print(f"  scenarios   : {total}  ({n_batches} batches of {batch_size})")
+    print(f"  scenarios   : {total}")
+    print(f"  workers     : {n_workers}")
     if p_filter:
         print(f"  p_filter    : {p_filter}")
     print()
 
-    t_global = time.time()
+    t_global     = time.time()
+    all_rows     = []
+    group_buf    = []  # accumulates rows for the current batch_size progress group
+    results_path = os.path.join(output_dir, "results.csv")
 
-    for batch_idx in range(n_batches):
-        batch_start = batch_idx * batch_size
-        batch_end   = min(batch_start + batch_size, total)
-        batch_rows  = scenarios[batch_start:batch_end]
+    with ProcessPoolExecutor(
+        max_workers=n_workers,
+        initializer=_init_worker,
+        initargs=(_HERE,),
+    ) as pool:
+        future_to_sid = {
+            pool.submit(
+                run_one,
+                str(index_row["scenario_id"]),
+                index_row,
+                dataset_dir,
+                window_overlap,
+                detector_version,
+                prior_mode,
+                suppress_output,
+            ): str(index_row["scenario_id"])
+            for _, index_row in scenarios
+        }
 
-        batch_path  = os.path.join(output_dir, f"batch_{batch_idx:04d}.csv")
+        for done_count, future in enumerate(as_completed(future_to_sid), 1):
+            sid = future_to_sid[future]
+            row = future.result()
+            all_rows.append(row)
+            group_buf.append(row)
 
-        # Check how many are already done in this batch
-        done_ids = set()
-        if os.path.exists(batch_path):
-            try:
-                done_df  = pd.read_csv(batch_path, dtype=str)
-                done_ids = set(done_df["scenario_id"].tolist())
-            except Exception:
-                done_ids = set()
-
-        remaining_in_batch = [
-            (_, row) for _, row in batch_rows
-            if str(row["scenario_id"]) not in done_ids
-        ]
-
-        if not remaining_in_batch:
-            print(f"  Batch {batch_idx:04d}/{n_batches-1}  [{batch_start}–{batch_end-1}]  COMPLETE — skip")
-            continue
-
-        print(
-            f"\n  Batch {batch_idx:04d}/{n_batches-1}"
-            f"  [{batch_start}–{batch_end-1}]"
-            f"  ({len(remaining_in_batch)} to run, {len(done_ids)} already done)"
-        )
-
-        t_batch  = time.time()
-        new_rows = []
-
-        for local_idx, (_, index_row) in enumerate(remaining_in_batch, start=1):
-            sid     = str(index_row["scenario_id"])
-            elapsed = time.time() - t_batch
-            global_pos = batch_start + batch_size - len(remaining_in_batch) + local_idx
-            print(
-                f"    [{local_idx:>3}/{len(remaining_in_batch)}]"
-                f"  (global {global_pos}/{total})"
-                f"  {sid}"
-                f"  {elapsed:.0f}s",
-                end="  ", flush=True,
-            )
-
-            row = run_one(
-                scenario_id=sid,
-                index_row=index_row,
-                dataset_dir=dataset_dir,
-                window_overlap=window_overlap,
-                detector_version=detector_version,
-                prior_mode=prior_mode,
-                suppress_output=suppress_output,
-            )
-            new_rows.append(row)
-
-            # Append to batch CSV immediately (crash-safe)
-            df_row = pd.DataFrame([row])
-            write_header = not os.path.exists(batch_path) or os.path.getsize(batch_path) == 0
-            df_row.to_csv(batch_path, mode="a", header=write_header, index=False)
-
+            elapsed = time.time() - t_global
             if row["status"] == "ok":
                 cm_nshd  = row.get("mean_norm_shd",              float("nan"))
                 dl_nshd  = row.get("directlingam_mean_norm_shd", float("nan"))
                 ica_nshd = row.get("icalingam_mean_norm_shd",    float("nan"))
                 print(
-                    f"CM={cm_nshd:.3f}"
-                    f"  DL={dl_nshd:.3f}"
-                    f"  ICA={ica_nshd:.3f}"
-                    f"  det_f1={row.get('det_f1', float('nan')):.2f}"
+                    f"  [{done_count:>4}/{total}]  {elapsed:>6.0f}s  {sid}"
+                    f"  CM={cm_nshd:.3f}  DL={dl_nshd:.3f}  ICA={ica_nshd:.3f}",
+                    flush=True,
                 )
             else:
-                print(f"ERROR: {row['error_msg'][:80]}")
+                print(
+                    f"  [{done_count:>4}/{total}]  {elapsed:>6.0f}s  {sid}"
+                    f"  ERROR: {row['error_msg'][:70]}",
+                    flush=True,
+                )
 
-        _print_batch_summary(new_rows, batch_idx)
+            if done_count % batch_size == 0:
+                _print_batch_summary(group_buf, done_count // batch_size - 1)
+                group_buf = []
+                pd.DataFrame(all_rows).to_csv(results_path, index=False)
+                print(f"  → checkpoint: {len(all_rows)} rows saved to {results_path}", flush=True)
+
+    if group_buf:
+        _print_batch_summary(group_buf, total // batch_size)
+
+    # Final write — covers any tail group smaller than batch_size
+    pd.DataFrame(all_rows).to_csv(results_path, index=False)
+    print(f"\n  Final save: {len(all_rows)} rows → {results_path}")
 
     _print_global_summary(output_dir)
     print(f"\nTotal elapsed: {time.time() - t_global:.0f}s")
@@ -602,9 +588,11 @@ if __name__ == "__main__":
     parser.add_argument("--dataset_dir",    type=str,   default="datasets",
                         help="Directory with index.csv and scenario CSVs (default: datasets/)")
     parser.add_argument("--output_dir",     type=str,   default="results",
-                        help="Directory to write batch CSVs (default: results/)")
+                        help="Directory to write results.csv (default: results/)")
     parser.add_argument("--batch_size",     type=int,   default=100,
-                        help="Scenarios per batch CSV (default: 100)")
+                        help="Progress-reporting group size (default: 100)")
+    parser.add_argument("--workers",        type=int,   default=None,
+                        help="Parallel worker processes (default: cpu_count // 2)")
     parser.add_argument("--detector",       type=str,   default="v1G", choices=["v1F", "v1G"],
                         help="Detector version (default: v1G)")
     parser.add_argument("--prior_mode",     type=str,   default="chain", choices=["anchor", "chain"],
@@ -621,6 +609,7 @@ if __name__ == "__main__":
         dataset_dir     = args.dataset_dir,
         output_dir      = args.output_dir,
         batch_size      = args.batch_size,
+        n_workers       = args.workers,
         detector_version= args.detector,
         prior_mode      = args.prior_mode,
         window_overlap  = args.window_overlap,

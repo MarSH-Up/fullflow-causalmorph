@@ -216,6 +216,7 @@ def build_nonstationary_scenario(
     change_pcts: List[float],
     seed: int,
     noise_fraction: float = 0.08,
+    regime_sizes: list = None,
 ):
     """
     Build a multi-regime non-stationary causal time series.
@@ -305,9 +306,12 @@ def build_nonstationary_scenario(
         dags.append(G)
 
     # Regime configs: each regime gets its trajectory DAG + varying noise ──────
-    regime_lengths = [
-        int(rng.integers(min_samples, max_samples + 1)) for _ in range(n_regimes)
-    ]
+    if regime_sizes is not None:
+        regime_lengths = list(regime_sizes)
+    else:
+        regime_lengths = [
+            int(rng.integers(min_samples, max_samples + 1)) for _ in range(n_regimes)
+        ]
     change_infos = []
     regime_configs = []
     for i, dag in enumerate(dags):

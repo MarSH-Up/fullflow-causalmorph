@@ -1,24 +1,3 @@
-# Generated datasets (large — regenerate with generate_datasets.py)
-datasets/
-
-# Batch experiment results (large — regenerate with run_experiments.py)
-results/
-
-# Python
+*.csv
 __pycache__/
-*.py[cod]
-*.egg-info/
-.eggs/
-dist/
-build/
-
-# Jupyter
-.ipynb_checkpoints/
-
-# Plots and figures (can be regenerated)
-plots/
-presentation_figures/
-presentation_figures.zip
-
-# macOS
-.DS_Store
+*.pyc
