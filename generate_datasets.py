@@ -4,18 +4,19 @@ Dataset generator for Full Pipeline experiments.
 Produces a reproducible grid of non-stationary causal time series and saves
 them as CSV files that run_experiments.py can load without re-generating data.
 
-Parameter grid (defaults — 17 280 scenarios)
+Parameter grid (defaults — 13 680 scenarios)
 ---------------------------------------------
   p              : 3..10              (8 values)
-  n_changes      : 1..6               (6 values — n_regimes = n_changes + 1 = 2..7)
-  samples_regime : 500, 2500, 5000    (3 values — MAX samples per regime; each regime
-                                       gets a random size in [MIN_REGIME_SAMPLES, samples_regime])
+  n_changes      : 1..min(6, p-1)    (capped per p to prevent structural degeneracy:
+                                       p=3→max 2, p=4→max 3, p=5→max 4, p=6→max 5, p≥7→max 6)
+  samples_regime : 500, 2500, 5000    (3 values — exact samples per regime; every regime
+                                       gets exactly samples_regime samples)
   base_pconn     : 0.20, 0.35, 0.50, 0.75   (4 values)
   noise_fraction : 0.02, 0.08, 0.20  (3 values — low / medium / high)
   seeds          : 10 per combination
 
-Grid math: 8 × 6 × 3 × 4 × 3 × 10 = 17 280 scenarios
-(matches the causalmorph SyntheticCausalScenarios_mixed_v2_5 reference at 17 280)
+Grid math: 38 valid (p, n_changes) pairs × 3 × 4 × 3 × 10 = 13 680 scenarios
+(p-based cap removes combos where n_regimes exceeds achievable structural transitions)
 
 Constraint: samples_regime >= 500 for every regime (change-point
 detection needs enough data per window; values below 500 are rejected).
@@ -44,7 +45,7 @@ Scenario ID format
 
 Usage
 -----
-  python generate_datasets.py                      # full default grid (17 280 scenarios)
+  python generate_datasets.py                      # full default grid (13 680 scenarios)
   python generate_datasets.py --p_min 3 --p_max 5 # restrict node range
   python generate_datasets.py --n_seeds 5          # fewer seeds per combo
   python generate_datasets.py --output_dir my_data # custom output directory
@@ -60,7 +61,7 @@ import itertools
 import numpy as np
 import pandas as pd
 
-MIN_REGIME_SAMPLES = 250  # hard floor on samples per regime
+MIN_REGIME_SAMPLES = 500  # hard floor on samples per regime (step validation needs pre+gap+post=330)
 
 # ── Path setup (mirrors full_pipeline.py) ─────────────────────────────────────
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -115,18 +116,9 @@ def generate_and_save(
             f"({MIN_REGIME_SAMPLES})"
         )
 
-    # Constrained random partition: sizes are random but sum exactly to
-    # n_regimes * samples_regime, each regime >= MIN_REGIME_SAMPLES.
-    # Uses stars-and-bars on the budget above the per-regime minimum.
-    rng = np.random.default_rng(seed)
-    total_samples = n_regimes * samples_regime
-    budget = total_samples - n_regimes * MIN_REGIME_SAMPLES
-    cuts = sorted(rng.integers(0, budget + 1, size=n_regimes - 1).tolist())
-    boundaries = [0] + cuts + [budget]
-    computed_sizes = [
-        MIN_REGIME_SAMPLES + (boundaries[i + 1] - boundaries[i])
-        for i in range(n_regimes)
-    ]
+    # Every regime gets exactly samples_regime samples — controlled, reproducible,
+    # and guarantees the step validation windows (160+10+160=330 samples) always fit.
+    computed_sizes = [samples_regime] * n_regimes
 
     (
         X,
@@ -187,6 +179,21 @@ def generate_and_save(
 
 # ── Build the parameter grid ──────────────────────────────────────────────────
 
+def _cap_n_changes(p: int, n_changes_max: int) -> int:
+    """
+    Cap n_changes to p-1 to prevent structural degeneracy.
+
+    With p nodes, the learning trajectory has at most p-1 meaningful edge-change
+    steps before consecutive regimes become structurally identical.  Claiming more
+    change points than there are actual structural changes inflates FN counts and
+    makes precision/recall meaningless.
+
+    Results per p (with n_changes_max=6):
+      p=3 → max 2   p=4 → max 3   p=5 → max 4   p=6 → max 5   p≥7 → max 6
+    """
+    return min(n_changes_max, p - 1)
+
+
 def build_grid(
     p_min: int,
     p_max: int,
@@ -207,13 +214,17 @@ def build_grid(
     p_list         = list(range(p_min, p_max + 1))
     n_regimes_list = list(range(n_changes_min + 1, n_changes_max + 2))
 
-    combos = list(itertools.product(
-        p_list,
-        n_regimes_list,
-        sorted(samples_list),
-        sorted(pconn_list),
-        sorted(noise_list),
-    ))
+    combos = [
+        (p, n_regimes, samples, pconn, noise)
+        for p, n_regimes, samples, pconn, noise in itertools.product(
+            p_list,
+            n_regimes_list,
+            sorted(samples_list),
+            sorted(pconn_list),
+            sorted(noise_list),
+        )
+        if (n_regimes - 1) <= _cap_n_changes(p, n_changes_max)
+    ]
 
     rows = []
     for combo_idx, (p, n_regimes, samples, pconn, noise) in enumerate(combos):
@@ -264,8 +275,8 @@ def run_generate(
     print("Dataset Generator — Full Pipeline")
     print("=" * 70)
     print(f"  p                : {p_min}..{p_max}  ({p_max - p_min + 1} values)")
-    print(f"  n_changes        : {n_changes_min}..{n_changes_max}  "
-          f"({n_changes_max - n_changes_min + 1} values → n_regimes {n_changes_min+1}..{n_changes_max+1})")
+    print(f"  n_changes        : {n_changes_min}..min({n_changes_max}, p-1)  "
+          f"(capped per p: p=3→2, p=4→3, p=5→4, p=6→5, p≥7→{n_changes_max})")
     print(f"  samples/regime   : {sorted(samples_list)}")
     print(f"  base_pconn       : {sorted(pconn_list)}")
     print(f"  noise_fraction   : {sorted(noise_list)}")
@@ -354,7 +365,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description=(
             "Generate non-stationary causal datasets for batch experiments.\n"
-            "Default grid: 8×6×3×4×3×10 = 17 280 scenarios."
+            "Default grid: 13 680 scenarios (38 p/n_changes pairs × 3 × 4 × 3 × 10).\n"
+            "n_changes is capped at p-1 per p to prevent structural degeneracy."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -387,13 +399,13 @@ if __name__ == "__main__":
     if bad:
         parser.error(f"--samples values must be >= 500 (got {bad})")
 
-    n_combos = (
-        (args.p_max - args.p_min + 1)
-        * (args.n_changes_max - args.n_changes_min + 1)
-        * len(args.samples)
-        * len(args.pconn)
-        * len(args.noise)
+    # Count valid (p, n_changes) pairs after p-based cap, then multiply other axes.
+    n_pn_pairs = sum(
+        _cap_n_changes(p, args.n_changes_max) - args.n_changes_min + 1
+        for p in range(args.p_min, args.p_max + 1)
+        if _cap_n_changes(p, args.n_changes_max) >= args.n_changes_min
     )
+    n_combos = n_pn_pairs * len(args.samples) * len(args.pconn) * len(args.noise)
     print(f"Grid: {n_combos} combinations × {args.n_seeds} seeds = {n_combos * args.n_seeds} scenarios")
 
     run_generate(

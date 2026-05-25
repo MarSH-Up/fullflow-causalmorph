@@ -101,7 +101,7 @@ def load_scenario(scenario_id: str, dataset_dir: str, index_row: pd.Series):
 # ── Detection post-processing (mirrors run_full_pipeline) ─────────────────────
 
 def _postprocess_detections(det_result, X, p, min_regime_len, min_samples):
-    refractory  = min(150, min_regime_len // 4)
+    refractory  = max(150, min_regime_len // 4)  # scales with regime length; min 150
     onset_set   = set(det_result.onset_points)
     first_onset = min(onset_set) if onset_set else float("inf")
 
@@ -297,7 +297,7 @@ def run_one(
 
             # Detection
             min_regime_len = min(regime_sizes) if regime_sizes else len(X) // max(n_regimes, 1)
-            baseline_end   = min(150, min_regime_len // 4)
+            baseline_end   = max(150, min_regime_len // 4)  # scales with regime length; min 150
 
             det_result   = detect_change_points(
                 X, baseline_end=baseline_end, min_regime_len=min_regime_len,

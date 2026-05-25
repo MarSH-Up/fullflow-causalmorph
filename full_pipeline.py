@@ -387,7 +387,7 @@ def detect_change_points(
     Returns the full DetectionResult (used for the diagnostic plot).
     """
     baseline_idx = np.arange(0, baseline_end)
-    refractory = min(150, min_regime_len // 4)
+    refractory = max(150, min_regime_len // 4)  # scales with regime length; min 150
 
     if detector_version == "v1G":
         result = detect_nonstationarity_v1G(
@@ -1488,9 +1488,9 @@ def run_full_pipeline(
         det_result = None
     else:
         print(f"\n[2] Running wavelet-based multi-moment detector ({detector_version})...")
-        baseline_end = min(150, regime_sizes[0] // 4)
+        baseline_end = max(150, regime_sizes[0] // 4)   # scales with regime length; min 150
         min_regime_len = min(regime_sizes)
-        refractory = min(150, min_regime_len // 4)
+        refractory = max(150, min_regime_len // 4)       # same scaling for peak separation
         det_result = detect_change_points(
             X,
             baseline_end=baseline_end,
