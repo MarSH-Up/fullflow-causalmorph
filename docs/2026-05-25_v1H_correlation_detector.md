@@ -345,3 +345,73 @@ The fallback to v1-G triggers only when correlation returns zero CPs across the 
 - CLI: `run_experiments.py --detector v1H`
 - Standalone benchmark scripts (ephemeral): `/tmp/bench_corr.py`, `/tmp/test_ensemble.py`, `/tmp/test_precision.py`
 - Full-grid results: `results/results.csv` (run 2026-05-25 14:15)
+
+---
+
+## Related work — prior art for correlation-based CPD
+
+The technique of detecting change points via shifts in the covariance/correlation
+structure of a multivariate time series is well-established. v1-H does **not**
+claim novelty in the correlation-based detection idea itself; its contribution
+is the empirical finding that this signal class dominates wavelet multi-moment
+detection for causal-graph-rewiring scenarios, and the integration into the
+non-stationary causal discovery pipeline.
+
+The references below should be verified against current databases before formal
+citation; entries marked **(verify)** are from session-time recall and the
+title/year/venue should be confirmed before use in a manuscript.
+
+### Direct prior art — covariance / correlation CPD
+
+- **Aue, Hörmann, Horváth, Reimherr (2009).** "Break detection in the covariance
+  structure of multivariate time series." *Journal of Multivariate Analysis*.
+  **(verify)** — CUSUM-style test on the Frobenius norm of empirical covariance
+  matrix differences. Mathematically the same statistic as v1-H, but uses an
+  asymptotic CUSUM testing framework rather than windowed peak detection.
+
+- **Truong, Oudre, Vayatis (2020).** "Selective review of offline change point
+  detection methods." *Signal Processing*. **(verify)** — General survey of
+  CPD techniques including covariance-shift methods. A good entry point to the
+  broader literature.
+
+### Sliding-window connectivity (applied / fMRI)
+
+- **Cribben, Haraldsdottir, Atlas, Wager, Lindquist (2012).** "Dynamic
+  connectivity regression: determining state-related changes in brain
+  connectivity." *NeuroImage*. **(verify)** — Applies sliding-window
+  correlation matrices and detects state changes via between-matrix distances.
+  Closely related framing for fMRI; uses different test statistics.
+
+- The broader "Dynamic Functional Connectivity" (DFC) literature in
+  neuroimaging applies windowed correlation matrices extensively for
+  state/regime change detection. Hindriks et al. (2016), Lurie et al. (2020),
+  and related reviews. **(verify)**
+
+### Kernel-based change-point detection
+
+- **Harchaoui, Bach, Moulines (2009).** Kernel change-point detection. The
+  Frobenius distance between empirical correlation matrices is a special case
+  of kernel-based two-sample testing across a candidate boundary. **(verify)**
+
+- **Arlot, Celisse, Harchaoui (2019).** "A kernel multiple change-point algorithm
+  via model selection." *JMLR*. **(verify)**
+
+### Suggested usage in a manuscript
+
+When framing v1-H's contribution, the honest positioning is:
+
+> "We adopt the sliding-window correlation-shift framework established by Aue
+> et al. (2009) and Cribben et al. (2012), and apply it to the specific problem
+> of change-point detection for causal-graph rewiring. Our contribution is the
+> empirical comparison against wavelet multi-moment detection on a controlled
+> 18,000-scenario benchmark, demonstrating that correlation-based detection
+> dominates by 39 percentage points in precision and 26 in recall."
+
+**Do a focused 1–2 day lit search before any submission** — the citations above
+are session-recall and should be verified for exact titles, authors, years, and
+venues. The general space (multivariate CPD, dynamic connectivity, kernel CPD)
+contains many close priors; a thorough search will both protect against
+over-claiming and surface the strongest comparison baselines.
+
+
+claude --resume 5e77a7cb-0298-45b6-ba9f-291796ab9d7f
