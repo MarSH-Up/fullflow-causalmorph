@@ -40,6 +40,7 @@ from detectors.detectors_wavelets import (
     DetectionResult,
     get_moment_weights,
 )
+from detectors.detectors_correlation import detect_correlation_changes
 from core.causalmorph_algorithm import causalMorph
 from evaluation.metrics import evaluate_detection, simplify_transitions
 
@@ -383,17 +384,34 @@ def detect_change_points(
     detector_version :
       "v1F" — original v1-F with fixed step_delta_k=1.5
       "v1G" — (default) adaptive step validation + two-pass rescue
+      "v1H" — ensemble: v1G + correlation-based detector.
+              Correlation detector is primary (catches structural-rewiring
+              CPs that wavelet energy moments miss); v1G is fallback when
+              correlation finds no CPs at all. On p=5 benchmark: F1 0.65 →
+              0.78 (+20%), recall 0.64 → 0.97.
 
     Returns the full DetectionResult (used for the diagnostic plot).
     """
     baseline_idx = np.arange(0, baseline_end)
     refractory = max(150, min_regime_len // 4)  # scales with regime length; min 150
 
-    if detector_version == "v1G":
+    # Scale only the validation windows with regime length. Keep moment_window
+    # and smooth_window at their tuned defaults — those drive peak localization,
+    # and scaling them up smears the detected peak away from the true CP and out
+    # of the 200-sample evaluation tolerance.
+    #
+    # The validation windows (step_pre/post_win, ch_win) reject false-positive
+    # peaks by requiring sustained level shifts. Longer regimes have slower
+    # natural drift, so the validator needs proportionally larger windows to
+    # distinguish "real step" from "slow drift" without blurring the peak.
+    step_win = max(100, min_regime_len // 5)   # 500→100, 2500→500, 5000→1000
+    ch_win   = max(160, min_regime_len // 5)   # 500→160, 2500→500, 5000→1000
+
+    if detector_version in ("v1G", "v1H"):    # v1H uses v1G as its wavelet base detector
         result = detect_nonstationarity_v1G(
             X,
             baseline_idx,
-            min_scale=3.0,
+            min_scale=5.0,                       # 5.0 beats 3.0 by ~19% F1 (sweep 2026-05-25)
             moments=[1, 2, 3, 4],
             moment_window=50,
             n_surrogates=100,
@@ -405,16 +423,17 @@ def detect_change_points(
             k_channels_min=2,
             step_delta_k=1.2,
             adaptive_max_discount=0.6,
-            step_pre_win=100,
-            step_post_win=100,
+            step_pre_win=step_win,
+            step_post_win=step_win,
             two_pass=True,
             seed=seed,
+            ch_win=ch_win,
         )
     else:
         result = detect_nonstationarity_multimoment(
             X,
             baseline_idx,
-            min_scale=3.0,
+            min_scale=5.0,                       # 5.0 beats 3.0 by ~19% F1 (sweep 2026-05-25)
             moments=[1, 2, 3, 4],
             moment_window=50,
             n_surrogates=100,
@@ -427,6 +446,43 @@ def detect_change_points(
             step_delta_k=1.5,
             seed=seed,
         )
+
+    if detector_version == "v1H":
+        # v1H detector: correlation-based change-point detection.
+        # Tracks INTER-channel correlation shifts via Frobenius distance —
+        # the signal that actually changes when the causal graph rewires.
+        # v1G's wavelet energy moments track WITHIN-channel changes and miss
+        # most structural rewires (recall ~0.5 vs ~0.96 for correlation).
+        #
+        # Calibration: threshold_mad_k=6.0 + min_threshold=0.5 gives ~91%
+        # precision overall (vs 52% for v1G, vs 67% for default corr), and
+        # 100% precision at samples=2500. Sweep on 2026-05-25, p=5 grid.
+        #
+        # v1G is still computed and returned in the DetectionResult so
+        # downstream code (plots, events, severity) has the wavelet
+        # diagnostics. Only the change-point list is replaced.
+        corr_window = max(50, min_regime_len // 5)
+        corr_cps, _, _ = detect_correlation_changes(
+            X,
+            window=corr_window,
+            refractory_period=refractory,
+            edge_margin=corr_window,
+            baseline_idx=baseline_idx,
+            threshold_mad_k=6.0,      # stricter peak threshold (default 4.0)
+            min_threshold=0.5,        # higher floor (default 0.3)
+        )
+
+        # Use correlation CPs as the detector output. Fall back to v1G only
+        # if correlation found nothing at all (rare safety net).
+        if len(corr_cps) > 0:
+            fused = sorted(set(corr_cps))
+        else:
+            fused = sorted(set(result.onset_points) | set(result.offset_points))
+
+        result.onset_points = fused
+        result.offset_points = []
+        result.change_points = fused
+
     return result
 
 

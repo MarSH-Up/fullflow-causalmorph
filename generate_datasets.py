@@ -4,18 +4,22 @@ Dataset generator for Full Pipeline experiments.
 Produces a reproducible grid of non-stationary causal time series and saves
 them as CSV files that run_experiments.py can load without re-generating data.
 
-Parameter grid (defaults — 13 680 scenarios)
+Parameter grid (defaults — 18 000 scenarios)
 ---------------------------------------------
-  p              : 3..10              (8 values)
+  p              : 3..12              (10 values)
   n_changes      : 1..min(6, p-1)    (capped per p to prevent structural degeneracy:
                                        p=3→max 2, p=4→max 3, p=5→max 4, p=6→max 5, p≥7→max 6)
-  samples_regime : 500, 2500, 5000    (3 values — exact samples per regime; every regime
-                                       gets exactly samples_regime samples)
+  samples_regime : 500, 1500, 2500    (3 values — TARGET samples per regime; each regime
+                                       size is drawn uniformly from [samples_regime*(1-J),
+                                       samples_regime*(1+J)] with J=0.4, clipped to
+                                       MIN_REGIME_SAMPLES=500. Change points land at
+                                       irregular positions like 1200, 2800, 4100 instead
+                                       of exact multiples of samples_regime.)
   base_pconn     : 0.20, 0.35, 0.50, 0.75   (4 values)
   noise_fraction : 0.02, 0.08, 0.20  (3 values — low / medium / high)
   seeds          : 10 per combination
 
-Grid math: 38 valid (p, n_changes) pairs × 3 × 4 × 3 × 10 = 13 680 scenarios
+Grid math: 50 valid (p, n_changes) pairs × 3 × 4 × 3 × 10 = 18 000 scenarios
 (p-based cap removes combos where n_regimes exceeds achievable structural transitions)
 
 Constraint: samples_regime >= 500 for every regime (change-point
@@ -45,7 +49,7 @@ Scenario ID format
 
 Usage
 -----
-  python generate_datasets.py                      # full default grid (13 680 scenarios)
+  python generate_datasets.py                      # full default grid (18 000 scenarios)
   python generate_datasets.py --p_min 3 --p_max 5 # restrict node range
   python generate_datasets.py --n_seeds 5          # fewer seeds per combo
   python generate_datasets.py --output_dir my_data # custom output directory
@@ -62,6 +66,7 @@ import numpy as np
 import pandas as pd
 
 MIN_REGIME_SAMPLES = 500  # hard floor on samples per regime (step validation needs pre+gap+post=330)
+REGIME_JITTER      = 0.4  # ±40% random variation around samples_regime, clipped to MIN_REGIME_SAMPLES
 
 # ── Path setup (mirrors full_pipeline.py) ─────────────────────────────────────
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -102,9 +107,11 @@ def generate_and_save(
     """
     Generate one scenario and write its CSV files.
 
-    samples_regime is used for both min_samples and max_samples so every
-    regime has an exact fixed length — matches the controlled design of the
-    causalmorph reference (nsamples is exact, not a range).
+    Regime sizes are randomized: each regime gets a length drawn uniformly
+    from [samples_regime*(1-REGIME_JITTER), samples_regime*(1+REGIME_JITTER)],
+    clipped to MIN_REGIME_SAMPLES. This produces change-point times at
+    irregular positions, exercising the detector's ability to localize CPs
+    that aren't at predictable intervals.
 
     Returns an index-row dict on success, raises on failure.
     """
@@ -116,9 +123,15 @@ def generate_and_save(
             f"({MIN_REGIME_SAMPLES})"
         )
 
-    # Every regime gets exactly samples_regime samples — controlled, reproducible,
-    # and guarantees the step validation windows (160+10+160=330 samples) always fit.
-    computed_sizes = [samples_regime] * n_regimes
+    # Random regime sizes ~ Uniform(samples_regime*(1-J), samples_regime*(1+J)),
+    # clipped to MIN_REGIME_SAMPLES (so step validation windows still fit).
+    # This makes change-point positions irregular (e.g., at samples 1200, 2800, 4100
+    # instead of always at exact multiples of samples_regime) — tests whether the
+    # detector can localize CPs at unpredictable times.
+    rng_sizes = np.random.default_rng(seed ^ 0xA110C)   # decoupled from data RNG
+    low  = max(MIN_REGIME_SAMPLES, int(samples_regime * (1 - REGIME_JITTER)))
+    high = int(samples_regime * (1 + REGIME_JITTER))
+    computed_sizes = rng_sizes.integers(low, high + 1, size=n_regimes).tolist()
 
     (
         X,
@@ -245,10 +258,10 @@ def build_grid(
 
 def run_generate(
     p_min: int           = 3,
-    p_max: int           = 10,
+    p_max: int           = 12,
     n_changes_min: int   = 1,
     n_changes_max: int   = 6,
-    samples_list         = (500, 2500, 5000),
+    samples_list         = (500, 1500, 2500),
     pconn_list           = (0.20, 0.35, 0.50, 0.75),
     noise_list           = (0.02, 0.08, 0.20),
     n_seeds: int         = 10,
@@ -365,22 +378,22 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description=(
             "Generate non-stationary causal datasets for batch experiments.\n"
-            "Default grid: 13 680 scenarios (38 p/n_changes pairs × 3 × 4 × 3 × 10).\n"
+            "Default grid: 18 000 scenarios (50 p/n_changes pairs × 3 × 4 × 3 × 10).\n"
             "n_changes is capped at p-1 per p to prevent structural degeneracy."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--p_min",          type=int,   default=3,
                         help="Min nodes (default 3)")
-    parser.add_argument("--p_max",          type=int,   default=10,
-                        help="Max nodes inclusive (default 10)")
+    parser.add_argument("--p_max",          type=int,   default=12,
+                        help="Max nodes inclusive (default 12)")
     parser.add_argument("--n_changes_min",  type=int,   default=1,
                         help="Min change points per scenario (default 1)")
     parser.add_argument("--n_changes_max",  type=int,   default=6,
                         help="Max change points per scenario (default 6)")
     parser.add_argument("--samples",        type=int,   nargs="+",
-                        default=[500, 2500, 5000],
-                        help="Exact samples per regime (default: 500 2500 5000)")
+                        default=[500, 1500, 2500],
+                        help="Exact samples per regime (default: 500 1500 2500)")
     parser.add_argument("--pconn",          type=float, nargs="+",
                         default=[0.20, 0.35, 0.50, 0.75],
                         help="Edge probabilities (default: 0.20 0.35 0.50 0.75)")

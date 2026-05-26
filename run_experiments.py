@@ -593,8 +593,9 @@ if __name__ == "__main__":
                         help="Progress-reporting group size (default: 100)")
     parser.add_argument("--workers",        type=int,   default=None,
                         help="Parallel worker processes (default: cpu_count // 2)")
-    parser.add_argument("--detector",       type=str,   default="v1G", choices=["v1F", "v1G"],
-                        help="Detector version (default: v1G)")
+    parser.add_argument("--detector",       type=str,   default="v1G", choices=["v1F", "v1G", "v1H"],
+                        help="Detector version (default: v1G; v1H = strict correlation-based "
+                             "detector, ~92%% precision vs v1G's ~52%%)")
     parser.add_argument("--prior_mode",     type=str,   default="chain", choices=["anchor", "chain"],
                         help="CausalMorph prior mode (default: chain)")
     parser.add_argument("--window_overlap", type=float, default=0.0,

@@ -2593,6 +2593,7 @@ def detect_nonstationarity_v1G(
     two_pass: bool = True,
     mean_regime_len: Optional[float] = None,
     min_gap_ratio: float = 2.0,
+    ch_win: int = 160,                 # channel-consistency pre/post window (scale w/ regime length)
 ) -> DetectionResult:
     """
     Gatekeeper v1-G: Adaptive Step Validation + Two-Pass Detection.
@@ -2672,9 +2673,9 @@ def detect_nonstationarity_v1G(
     )
 
     # STEP 6c: K-of-channels consistency gate
-    # Use v1-F window sizes (160) — per-channel estimates need longer windows
-    # for stable mean/std; shorter step_pre_win is only for step validation.
-    ch_win = 160
+    # Per-channel estimates need longer windows than step validation for stable
+    # mean/std. Default is 160 (v1-F sizing); callers pass larger ch_win for
+    # longer regimes (e.g., samples_regime=5000 -> ch_win=1000).
     if N > 1 and k_channels_min > 0:
         onset_points_raw, onset_ch_info = filter_peaks_by_channel_consistency(
             onset_points_raw, E_ch_pos, E_ch_neg, "onset",
