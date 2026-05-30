@@ -1,8 +1,25 @@
 # Detector v1-H: Correlation-Based Change-Point Detection
 
-**Date:** 2026-05-25
+**Date:** 2026-05-25 (originally drafted) · **Updated:** 2026-05-26 (full-grid consolidation)
 **Files added:** `NSD_Wavelets/src/detectors/detectors_correlation.py`
 **Files modified:** `full_pipeline.py` (added `v1H` branch in `detect_change_points`), `run_experiments.py` (CLI option)
+**Final-run results CSV:** `results/results.csv` (v1G, 18,000 rows complete) · `results/results-v1h.csv` (v1H, 14,800 rows / 82.2% as of update)
+**Plots:** `results/v1g_vs_v1h_comparison.png`, `results/chain_cascade.png`, `results/detector_benefit.png`
+
+---
+
+## Headline result (matched subset, ~30,640 scenarios, p = 3..11)
+
+| Metric | Wavelet (v1G) | Correlation (v1H) | Δ |
+|---|---|---|---|
+| Detection precision | 0.665 | **0.846** | +18.1 pp / +27% |
+| Detection recall    | 0.440 | **0.561** | +12.1 pp / +27% |
+| Detection F1        | 0.530 | **0.675** | +27% |
+| Mean FPs per scenario | 0.92 | **0.55** | −40% |
+| CausalMorph mean nSHD | 0.247 | **0.232** | better 6% |
+| CM vs DirectLiNGAM win rate | 99.2% | 99.0% | both dominate |
+
+The structural finding is that **the precision gap widens at long regime lengths** (v1G drops to F1 0.51 at samples=2500; v1H stays at 0.76) and **the per-regime nSHD gap accumulates through the Bayesian chain prior** (see §"Chain-prior error propagation" below).
 
 ---
 
@@ -55,6 +72,22 @@ The path from v1-G to v1-H was driven by a sequence of focused sweeps. Each row 
 - **2026-05-25 evening** — Fusion strategies tested. Union hurt precision (0.55 vs 0.66 for corr alone); intersection hurt recall (0.47 vs 0.97). Strict correlation alone (`threshold_mad_k=6.0`, `min_threshold=0.5`) dominated all variants: **precision 0.92, recall 0.96**.
 
 **Full-grid verification** (2300 scenarios, p ∈ {5, 6}, n_changes ∈ {1..4}, all pconn × noise combinations): precision = 0.946, recall = 0.752, F1 = 0.838. Precision is essentially flat across sample sizes (0.916–0.964) — the v1-G long-series collapse is eliminated.
+
+---
+
+## Adaptations from Aue et al. (2009)
+
+v1-H takes the **intuition** from Aue, Hörmann, Horváth & Reimherr (2009) — that change points in a multivariate time series can be detected via shifts in its second-order (covariance) structure — but is not a direct implementation of the paper. Four design decisions diverge from the published method to make the detector practical inside this causal-discovery pipeline:
+
+1. **Pearson correlation instead of covariance.** The original method works on empirical covariance matrices. v1-H uses Pearson correlation, which is scale-invariant: the change signal does not depend on the absolute amplitude of each channel. This matters here because regime-to-regime the per-channel signal strength varies (the LiNGAM scenario generator picks `signal_strength` independently per regime), and using covariance would conflate amplitude shifts with structural rewiring. Correlation isolates the structural component.
+
+2. **Sliding-window past-vs-future comparison instead of CUSUM.** Aue et al. use a CUSUM-style statistic — a running cumulative deviation from the global mean — paired with asymptotic distribution theory to detect a single break (extended to multiple breaks via binary segmentation). v1-H computes, at each time `t`, the Frobenius distance between the correlation matrix of `[t-W, t]` (past) and `[t, t+W]` (future). The result is a per-time-step change signal `S(t)` on which we can run `scipy.signal.find_peaks` to recover multiple change points in a single pass, no binary segmentation required. This is simpler operationally and gives natural localization (each detected CP is a local maximum of `S`, not the endpoint of a segment).
+
+3. **MAD-based robust thresholding instead of asymptotic test.** The published method derives a threshold from the asymptotic distribution of the CUSUM statistic under the null hypothesis of stationarity, which requires regularity conditions (e.g., mixing assumptions, moment existence) that often don't hold in practice and are essentially untestable on real data. v1-H sets the threshold empirically from the baseline portion of each scenario using `median + k · 1.4826 · MAD`, which is robust to outliers in the baseline window and adapts per-scenario to whatever noise level is actually present. Strictness is controlled by `k`; v1-H uses `k=6.0` after the precision-priority sweep.
+
+4. **Window-size and refractory scaling with regime length.** The original paper does not address how to choose the window size for finite samples beyond asymptotic convergence rates. v1-H scales `W = max(50, min_regime_len // 5)` and `refractory_period = max(150, min_regime_len // 4)`, both calibrated empirically on the benchmark. This makes the detector behave consistently across the full samples_regime range (500 → 2500), where a fixed window would either smear short-regime CPs or miss the signal in long regimes.
+
+Collectively these adaptations turn a theoretical break-detection statistic into an operational detector tuned for the precision-critical role it plays inside the non-stationary causal discovery pipeline. The intuition (correlation-shift signals structural rewiring) comes from the paper; the design choices are ours.
 
 ---
 
@@ -241,45 +274,135 @@ This is why correlation is the right signal for structural-rewiring change detec
 
 ## Empirical results
 
-### Standalone benchmark (24 scenarios, p=5, pconn=0.35, noise=0.08)
+### Detection metric definitions
 
-| samples | v1G prec | v1G rec | v1G F1 | v1H prec | v1H rec | v1H F1 |
-|---|---|---|---|---|---|---|
-| 500 | 0.778 | 0.833 | 0.805 | **0.792** | **0.917** | **0.850** |
-| 1500 | 0.597 | 0.583 | 0.590 | **0.958** | **0.958** | **0.958** |
-| 2500 | 0.583 | 0.458 | 0.513 | **1.000** | **1.000** | **1.000** |
-| **mean** | **0.653** | **0.625** | **0.639** | **0.917** | **0.958** | **0.937** |
+For each scenario we compare the detector's output against the ground-truth change-point list (known from `build_nonstationary_scenario`), using a **tolerance of ±200 samples** to decide if a detection "hits" a true CP.
 
-### Full-grid results (2300 scenarios, p∈{5,6}, n_changes∈{1,2,3,4}, all pconn, all noise)
+- **TP** (true positive) — detected CP within ±200 samples of a true CP
+- **FP** (false positive) — detected CP with no true CP within ±200 samples
+- **FN** (false negative) — true CP with no detection within ±200 samples
 
-| samples | precision | recall | F1 | mean FPs |
+Then `Precision = TP/(TP+FP)`, `Recall = TP/(TP+FN)`, and `F1 = 2·P·R / (P+R)`.
+
+**We prioritize precision over recall in this work** because the effects of false positives accumulate through the Bayesian chain prior — a fake regime produces a corrupted prior that biases the next regime's fit, and the next, and so on. False negatives are more local: they cause two adjacent regimes to be merged into one, a big but contained error. This is why v1-H is calibrated with a strict threshold (`threshold_mad_k = 6.0`): we prefer to detect fewer changes but trust the ones we do find. See §"Chain-prior error propagation" below for empirical evidence.
+
+### Full-grid comparison (2026-05-26 consolidation)
+
+Both runs use the v1H-era benchmark grid: `p ∈ {3..12}`, `samples_regime ∈ {500, 1500, 2500}`, `n_changes ∈ {1..6}`, four `pconn` values, three `noise_fraction` values, 10 seeds per cell, with regime sizes randomly jittered ±40% around `samples_regime` (clipped to MIN_REGIME_SAMPLES=500).
+
+- **v1G complete:** 18,000 / 18,000 scenarios.
+- **v1H:** 14,800 / 18,000 (82.2% at time of writing; still running on p=11/12 tail).
+- **Matched-subset comparison:** 14,800 v1H rows vs 15,840 v1G rows on `p ∈ {3..11}`.
+
+#### Overall on matched subset
+
+| metric | v1G | v1H |
+|---|---|---|
+| precision | 0.665 | **0.846** |
+| recall | 0.440 | **0.561** |
+| F1 | 0.530 | **0.675** |
+| mean FPs/scenario | 0.92 | **0.55** |
+| CM mean nSHD | 0.247 | **0.232** |
+| CM consensus nSHD | 0.528 | **0.514** |
+
+See `results/detector_benefit.png` (left panel).
+
+#### By samples_regime — the long-regime collapse, clearly visible
+
+| samples | v1G prec | v1H prec | v1G F1 | v1H F1 |
 |---|---|---|---|---|
-| 500 | 0.958 | 0.701 | 0.810 | 0.09 |
-| 1500 | 0.916 | 0.782 | 0.844 | 0.22 |
-| 2500 | 0.964 | 0.780 | 0.862 | 0.04 |
-| **overall** | **0.946** | **0.752** | **0.838** | **0.12** |
+| 500  | 0.857 | 0.935 | 0.52 | 0.53 |
+| 1500 | 0.555 | **0.785** | 0.52 | **0.69** |
+| 2500 | 0.583 | **0.816** | 0.51 | **0.76** |
 
-**Headline:** precision is essentially flat at 92–96% across all sample sizes. The previous v1-G collapse at long series (44% precision at samples=2500) is eliminated.
+v1G F1 stays flat around 0.51 across all regime lengths because both precision and recall trade off badly. v1H benefits from longer regimes — more samples mean more stable Pearson correlation estimates. See `results/v1g_vs_v1h_comparison.png` (top-left) and `results/detector_benefit.png` (right panel).
 
-### By node count (p)
+#### By node count (p)
 
-| p | n | precision | recall | F1 |
+| p | v1G prec | v1G rec | v1H prec | v1H rec |
 |---|---|---|---|---|
-| 5 | 1440 | 0.944 | 0.710 | 0.811 |
-| 6 | 860 | 0.950 | 0.821 | 0.881 |
+| 3  | 0.487 | 0.558 | **0.873** | **0.722** |
+| 4  | 0.575 | 0.458 | **0.901** | **0.700** |
+| 5  | 0.607 | 0.514 | **0.868** | **0.716** |
+| 6  | 0.665 | 0.556 | **0.851** | **0.704** |
+| 7  | 0.675 | 0.533 | **0.826** | **0.647** |
+| 8  | 0.678 | 0.431 | **0.811** | **0.505** |
+| 9  | 0.685 | 0.385 | **0.817** | **0.440** |
+| 10 | 0.713 | 0.359 | **0.847** | **0.407** |
+| 11 | 0.717 | 0.300 | **0.894** | **0.367** |
 
-Precision is stable; recall improves with more channels (more pairwise correlations → richer change signal).
+Two trends to note:
+1. v1G's **precision rises with p** (0.49 → 0.72) — more channels eventually give the multi-channel wavelet gate enough redundancy to do better. But v1H is at or above 0.81 at every p.
+2. **Both detectors' recall drops with p** because the high-p scenarios generate denser graphs and more cumulative CPs to find. v1H stays consistently above v1G by 5–17 percentage points.
 
-### By n_changes
+#### By n_changes
 
-| n_changes | precision | recall | F1 |
+| n_changes | v1G prec | v1H prec | v1G rec | v1H rec |
+|---|---|---|---|---|
+| 1 | 0.718 | **0.882** | 0.542 | **0.734** |
+| 2 | 0.682 | **0.872** | 0.440 | **0.591** |
+| 3 | 0.675 | **0.848** | 0.413 | **0.524** |
+| 4 | 0.640 | **0.819** | 0.415 | **0.487** |
+| 5 | 0.622 | **0.798** | 0.405 | **0.461** |
+| 6 | 0.610 | **0.802** | 0.379 | **0.416** |
+
+Precision for v1H stays in 0.80–0.88 across the entire n_changes range. The detector does not produce extra spurious CPs as scenarios get harder; recall declines because each independent true CP has a constant miss probability.
+
+#### CausalMorph nSHD by p (v1H run, p=3..11)
+
+| p | CausalMorph | DirectLiNGAM | ICA-LiNGAM | CM win rate |
+|---|---|---|---|---|
+| 3  | **0.151** | 0.523 | 0.534 | 100.0% |
+| 5  | **0.208** | 0.421 | 0.454 | 98.8% |
+| 7  | **0.230** | 0.415 | 0.453 | 99.3% |
+| 9  | **0.254** | 0.426 | 0.515 | 98.7% |
+| 11 | **0.261** | 0.442 | 0.539 | 99.4% |
+
+CausalMorph is ~2× better than either LiNGAM baseline at every p. Win rate (per-scenario, "nSHD strictly lower than the baseline") is **99.0% vs DirectLiNGAM and 99.9% vs ICA-LiNGAM** overall.
+
+---
+
+## Chain-prior error propagation (new finding, 2026-05-26)
+
+The most methodologically important finding from the consolidation run is that **detector precision does not just affect detection — it propagates through the Bayesian causal-discovery pipeline**.
+
+### Setup
+
+The `extract_causal_structures` function in `full_pipeline.py` runs in `prior_mode="chain"` by default: regime `N`'s CausalMorph uses the adjacency matrix learned in regime `N−1` as its Bayesian prior. The initial prior (regime 0) comes from `initial_adj`, which under the benchmark is the ground-truth adjacency of regime 0.
+
+This means:
+- **Regime 0**: prior = ground truth; both detectors start with the same prior.
+- **Regime N ≥ 1**: prior comes from the previous regime's learned DAG. Any error in regime `N−1` contaminates the prior for `N`, which then contaminates `N+1`, and so on.
+
+### Empirical cascade
+
+Per-regime nSHD averaged across the matched subset (only regime indices with ≥100 samples in both detectors shown):
+
+| regime idx | v1H nSHD | v1G nSHD | gap |
 |---|---|---|---|
-| 1 | 0.956 | 0.951 | 0.954 |
-| 2 | 0.943 | 0.761 | 0.842 |
-| 3 | 0.938 | 0.615 | 0.743 |
-| 4 | 0.943 | 0.524 | 0.673 |
+| 0 | 0.134 | 0.150 | +0.016 |
+| 1 | 0.252 | 0.266 | +0.014 |
+| 2 | 0.281 | 0.304 | +0.023 |
+| 3 | 0.287 | 0.328 | +0.041 |
+| 4 | 0.286 | 0.345 | **+0.059** |
+| 5 | 0.286 | 0.361 | **+0.075** |
+| 6 | 0.284 | 0.368 | **+0.084** |
+| 7 | 0.285 | 0.378 | **+0.093** |
+| 8 | 0.279 | 0.383 | **+0.104** |
 
-**Key invariant: precision stays at ~0.94 regardless of n_changes.** The detector does not generate spurious detections as scenarios get harder — recall drops linearly because each independent true CP has a constant ~5–25% miss probability.
+See `results/chain_cascade.png` for the visualization.
+
+### Reading the result
+
+- **Both detectors start at the same point** (regime 0, ground-truth prior).
+- **By regime 1** both have jumped to ~0.26 — the first time a learned prior is used, both incur a similar "first hop" loss.
+- **From regime 3 onward, v1H stabilizes around 0.29.** Its per-regime error stays constant — the chain is stable.
+- **v1G keeps growing**: 0.30 → 0.33 → 0.35 → 0.36 → 0.37 → 0.38 → 0.38. The chain accumulates error because the detector's mistakes contaminate the prior for downstream regimes.
+- **By regime 8 the gap reaches +0.10 nSHD** — about 30% extra structural error caused purely by detector-driven prior corruption.
+
+This is why the per-regime nSHD difference between v1H and v1G (0.232 vs 0.247 globally) is **larger than it looks**: it is the time-averaged outcome of a process where v1G keeps climbing while v1H damps out. With more regimes per scenario or longer chains, the gap grows further.
+
+**Implication for the precision-priority decision:** the cost of a false-positive detection is not just one extra spurious window — it's also a corrupted prior that biases every subsequent regime's structure fit. This is the empirical justification for tuning v1-H toward precision (`threshold_mad_k = 6.0`) rather than balanced F1.
 
 ---
 
@@ -338,13 +461,18 @@ The fallback to v1-G triggers only when correlation returns zero CPs across the 
 
 ---
 
-## References to code
+## References to code and data
 
 - Detector implementation: `NSD_Wavelets/src/detectors/detectors_correlation.py`
 - Integration: `full_pipeline.py::detect_change_points` (v1H branch)
 - CLI: `run_experiments.py --detector v1H`
-- Standalone benchmark scripts (ephemeral): `/tmp/bench_corr.py`, `/tmp/test_ensemble.py`, `/tmp/test_precision.py`
-- Full-grid results: `results/results.csv` (run 2026-05-25 14:15)
+- Standalone benchmark scripts (ephemeral): `/tmp/bench_corr.py`, `/tmp/test_ensemble.py`, `/tmp/test_precision.py`, `/tmp/cascade_plot.py`, `/tmp/make_full_plots.py`, `/tmp/make_plot3_revised.py`
+- **Final-run results CSV (v1G complete):** `results/results.csv` (18,000 rows, p=3..12)
+- **Final-run results CSV (v1H, 82.2%):** `results/results-v1h.csv` (14,800 rows, p=3..11)
+- **Plots used in advisor report:**
+  - `results/v1g_vs_v1h_comparison.png` — 4-panel comparison of precision and nSHD by samples and by p
+  - `results/chain_cascade.png` — per-regime nSHD across chain position, showing error accumulation in v1G
+  - `results/detector_benefit.png` — headline metrics (precision/recall/F1/FPs) and F1-by-samples
 
 ---
 

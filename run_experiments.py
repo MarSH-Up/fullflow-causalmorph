@@ -61,7 +61,14 @@ from full_pipeline import (
     aggregate_structures_bayesian,
     ABLATION_METHODS,
 )
-from evaluation.metrics import evaluate_detection, simplify_transitions
+from evaluation.metrics import (
+    evaluate_detection,
+    simplify_transitions,
+    windowed_nshd_weighted,
+    coverage_score,
+    transition_shd,
+    dynamic_score,
+)
 
 
 # ── Load one scenario ─────────────────────────────────────────────────────────
@@ -202,6 +209,21 @@ def _extract_metrics(
         "consensus_recall":    cm_shd["Recall"],
     }
 
+    # ── Dynamic / non-stationary metrics (CausalMorph) ───────────────────────
+    # Replace unweighted mean nSHD with length-weighted alignment-aware metrics.
+    # Captures: coverage of missed regimes, transition tracking, composite score.
+    T_full       = len(result["X"])
+    det_f1       = er.f1_score
+    true_cps_lst = result["true_change_points"]
+    cm_dyn = {
+        "windowed_nshd_weighted": round(windowed_nshd_weighted(structs, true_adjs, true_cps_lst, T_full, p), 4),
+        "coverage_score":         round(coverage_score(structs, true_cps_lst, T_full), 4),
+        "transition_shd":         round(transition_shd(structs, true_adjs, true_cps_lst, T_full, p), 4),
+    }
+    cm_dyn["dynamic_score"] = round(
+        dynamic_score(cm_dyn["windowed_nshd_weighted"], det_f1, cm_dyn["coverage_score"]), 4
+    )
+
     # ── Ablation: DirectLiNGAM and ICA-LiNGAM ────────────────────────────────
     ablation_out = {}
     if "ablation" in result and result["ablation"]:
@@ -231,6 +253,15 @@ def _extract_metrics(
                 for sfx in ("cons_norm_shd", "cons_f1", "cons_precision", "cons_recall"):
                     ablation_out[f"{method}_{sfx}"] = np.nan
 
+            # Dynamic metrics per ablation method
+            w_a = windowed_nshd_weighted(structs_m, true_adjs, true_cps_lst, T_full, p)
+            c_a = coverage_score(structs_m, true_cps_lst, T_full)
+            t_a = transition_shd(structs_m, true_adjs, true_cps_lst, T_full, p)
+            ablation_out[f"{method}_windowed_nshd_weighted"] = round(w_a, 4)
+            ablation_out[f"{method}_coverage_score"]         = round(c_a, 4)
+            ablation_out[f"{method}_transition_shd"]         = round(t_a, 4)
+            ablation_out[f"{method}_dynamic_score"]          = round(dynamic_score(w_a, det_f1, c_a), 4)
+
     return {
         # ── identification ───────────────────────────────────────────────────
         "scenario_id":    scenario_id,
@@ -245,6 +276,8 @@ def _extract_metrics(
         **det,
         # ── CausalMorph per-regime ────────────────────────────────────────────
         **cm_struct,
+        # ── CausalMorph dynamic / non-stationary metrics ─────────────────────
+        **cm_dyn,
         # ── CausalMorph consensus ─────────────────────────────────────────────
         **cm_consensus,
         # ── ablation (DirectLiNGAM, ICA-LiNGAM) ──────────────────────────────
@@ -262,6 +295,10 @@ def run_one(
     detector_version: str,
     prior_mode: str,
     suppress_output: bool,
+    hybrid: bool = True,
+    bootstrap_n: int = 20,
+    bootstrap_threshold: float = 0.60,
+    chain_prior_threshold: float = 0.05,
 ) -> dict:
     """Run one scenario (always with ablation). Returns a flat metrics dict."""
     ctx = contextlib.redirect_stdout(io.StringIO()) if suppress_output else contextlib.nullcontext()
@@ -316,6 +353,10 @@ def run_one(
                 window_overlap=window_overlap,
                 verbose=False,
                 prior_mode=prior_mode,
+                hybrid=hybrid,
+                bootstrap_n=bootstrap_n,
+                bootstrap_threshold=bootstrap_threshold,
+                chain_prior_edge_threshold=chain_prior_threshold,
             )
             T = len(X)
             for s in structures:
@@ -471,7 +512,11 @@ def run_experiments(
     n_workers: int        = None,
     detector_version: str = "v1G",
     prior_mode: str       = "chain",
-    window_overlap: float = 0.0,
+    window_overlap: float = 0.15,
+    hybrid: bool          = False,
+    bootstrap_n: int      = 20,
+    bootstrap_threshold: float = 0.60,
+    chain_prior_threshold: float = 0.05,
     suppress_output: bool = True,
     p_filter: int         = None,
 ):
@@ -504,6 +549,9 @@ def run_experiments(
     print(f"  output_dir  : {output_dir}/")
     print(f"  detector    : {detector_version}")
     print(f"  prior_mode  : {prior_mode}")
+    print(f"  window_overlap : {window_overlap}")
+    print(f"  hybrid      : {hybrid}")
+    print(f"  bootstrap_n : {bootstrap_n}  (threshold={bootstrap_threshold})")
     print(f"  methods     : CausalMorph + DirectLiNGAM + ICA-LiNGAM")
     print(f"  scenarios   : {total}")
     print(f"  workers     : {n_workers}")
@@ -531,6 +579,10 @@ def run_experiments(
                 detector_version,
                 prior_mode,
                 suppress_output,
+                hybrid,
+                bootstrap_n,
+                bootstrap_threshold,
+                chain_prior_threshold,
             ): str(index_row["scenario_id"])
             for _, index_row in scenarios
         }
@@ -593,13 +645,29 @@ if __name__ == "__main__":
                         help="Progress-reporting group size (default: 100)")
     parser.add_argument("--workers",        type=int,   default=None,
                         help="Parallel worker processes (default: cpu_count // 2)")
-    parser.add_argument("--detector",       type=str,   default="v1G", choices=["v1F", "v1G", "v1H"],
-                        help="Detector version (default: v1G; v1H = strict correlation-based "
-                             "detector, ~92%% precision vs v1G's ~52%%)")
+    parser.add_argument("--detector",       type=str,   default="v1G", choices=["v1F", "v1G", "v1H", "v1I"],
+                        help="Detector version (default: v1G). "
+                             "v1H = strict correlation-based detector, ~92%% precision vs v1G's ~52%%. "
+                             "v1I = wavelet-coherence-based detector (Grinsted et al. 2004); "
+                             "frequency-resolved joint-distribution change signal.")
     parser.add_argument("--prior_mode",     type=str,   default="chain", choices=["anchor", "chain"],
                         help="CausalMorph prior mode (default: chain)")
-    parser.add_argument("--window_overlap", type=float, default=0.0,
-                        help="CausalMorph window overlap fraction (default: 0.0)")
+    parser.add_argument("--window_overlap", type=float, default=0.15,
+                        help="CausalMorph window overlap fraction (default: 0.15; was 0.0).")
+    parser.add_argument("--hybrid",         dest="hybrid", action="store_true", default=False,
+                        help="Hybrid warm/cold model selection by residual independence (default: OFF). "
+                             "Ablation (2026-05-27, 180 scenarios) found hybrid alone drops per-regime "
+                             "F1 by 49%% on CausalMorph; the residual-independence selector picks 'cold' "
+                             "when 'warm' was better.  Kept as opt-in for future use.")
+    parser.add_argument("--no-hybrid",      dest="hybrid", action="store_false",
+                        help="Disable hybrid selection (current default).")
+    parser.add_argument("--bootstrap_n",    type=int,   default=20,
+                        help="Bootstrap resamples per window for edge stability (default: 20; 0 = off).")
+    parser.add_argument("--bootstrap_threshold", type=float, default=0.60,
+                        help="Edge frequency threshold for bootstrap consensus (default: 0.60).")
+    parser.add_argument("--chain_prior_threshold", type=float, default=0.05,
+                        help="Edge weight threshold for binarising the chain prior between regimes "
+                             "(default: 0.05; phase-2 experiment used 0.10).")
     parser.add_argument("--verbose",        action="store_true",
                         help="Show per-run pipeline output (very noisy)")
     parser.add_argument("--p_filter",       type=int,   default=None,
@@ -614,6 +682,10 @@ if __name__ == "__main__":
         detector_version= args.detector,
         prior_mode      = args.prior_mode,
         window_overlap  = args.window_overlap,
+        hybrid          = args.hybrid,
+        bootstrap_n     = args.bootstrap_n,
+        bootstrap_threshold = args.bootstrap_threshold,
+        chain_prior_threshold = args.chain_prior_threshold,
         suppress_output = not args.verbose,
         p_filter        = args.p_filter,
     )

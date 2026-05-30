@@ -217,6 +217,179 @@ def simplify_transitions(
     return simplified
 
 
+# ── Dynamic / non-stationary structure metrics ──────────────────────────────
+#
+# For non-stationary causal discovery the mean of per-regime nSHD hides three
+# kinds of failure that matter:
+#   1. Length bias  — small regimes count as much as long ones, but the long
+#      ones carry most of the data evidence.
+#   2. Coverage     — when a change point is missed, a true regime gets no
+#      detected window at all; the unweighted mean silently skips it.
+#   3. Transitions  — a pipeline can match each regime's structure well in
+#      isolation but learn the wrong *deltas* between them; that failure mode
+#      is invisible to per-regime SHD.
+#
+# We therefore expose four complementary metrics:
+#   • windowed_nshd_weighted : length-weighted nSHD over true regimes; missed
+#                              regimes counted at maximum penalty (=1.0).
+#   • coverage_score         : fraction of true regimes covered ≥50% by some
+#                              detected window.
+#   • transition_shd         : normalised SHD between true and learned regime
+#                              transitions (edge symmetric-differences).
+#   • dynamic_score          : composite for headline reporting; lower=better.
+#
+# References for the framing: dynamic Bayesian network evaluation literature
+# (Trabelsi et al. 2-TBN-SHD); non-stationary causal discovery practice
+# (windowed SHD); change-point detection precision/recall conventions.
+
+
+def _bin_adj(A) -> np.ndarray:
+    """Return a binary square matrix with zero diagonal, accepting DataFrame or ndarray."""
+    if hasattr(A, "values"):
+        A = A.values
+    A = np.asarray(A)
+    B = (np.abs(A) > 0.05).astype(bool)
+    np.fill_diagonal(B, False)
+    return B
+
+
+def _best_overlap_struct(structures, r_start, r_end):
+    """Return (overlap, structure) for the detected window with max overlap on [r_start, r_end)."""
+    best_overlap = 0
+    best = None
+    for s in structures:
+        ov = max(0, min(s.window_end, r_end) - max(s.window_start, r_start))
+        if ov > best_overlap:
+            best_overlap = ov
+            best = s
+    return best_overlap, best
+
+
+def windowed_nshd_weighted(structures, true_adjs, true_cps, T, p) -> float:
+    """
+    Length-weighted normalised SHD over true regimes.
+
+    For each true regime k of length L_k, the structure with maximum
+    overlap is the "aligned" prediction Ĝ_{a(k)}.  Missing alignment
+    (no detected window overlaps regime k) is charged the maximum
+    penalty of 1.0.
+
+    score = (Σ_k L_k · nSHD_k) / (Σ_k L_k)
+    """
+    boundaries = [0] + list(true_cps) + [T]
+    regime_spans = list(zip(boundaries[:-1], boundaries[1:]))
+    if not regime_spans or p < 2:
+        return 0.0
+
+    max_edges = p * (p - 1)
+    total_w_shd = 0.0
+    total_w = 0.0
+
+    for k, (rs, re) in enumerate(regime_spans):
+        L_k = re - rs
+        true_bin = _bin_adj(true_adjs[k]) if k < len(true_adjs) else None
+        _, best = _best_overlap_struct(structures, rs, re)
+        if best is None or true_bin is None:
+            nshd_k = 1.0
+        else:
+            pred_bin = _bin_adj(best.adjacency_matrix)
+            diff = np.sum(true_bin != pred_bin)
+            nshd_k = diff / max_edges if max_edges else 0.0
+        total_w_shd += L_k * nshd_k
+        total_w += L_k
+
+    return float(total_w_shd / total_w) if total_w > 0 else 1.0
+
+
+def coverage_score(structures, true_cps, T, min_fraction: float = 0.5) -> float:
+    """Fraction of true regimes covered ≥ `min_fraction` by some detected window."""
+    boundaries = [0] + list(true_cps) + [T]
+    regime_spans = list(zip(boundaries[:-1], boundaries[1:]))
+    if not regime_spans:
+        return 0.0
+    covered = 0
+    for rs, re in regime_spans:
+        L = re - rs
+        if L <= 0:
+            continue
+        best_ov, _ = _best_overlap_struct(structures, rs, re)
+        if best_ov / L >= min_fraction:
+            covered += 1
+    return float(covered / len(regime_spans))
+
+
+def transition_shd(structures, true_adjs, true_cps, T, p) -> float:
+    """
+    Normalised SHD between true and learned regime *transitions*.
+
+    For each adjacent true pair (G_k, G_{k+1}) we compute the symmetric
+    difference δ_k = G_k ⊕ G_{k+1} (edges that appeared or disappeared).
+    Same for the aligned predictions.  The metric is the mean over all
+    transitions of |δ_k_true ⊕ δ_k_pred| / max_edges.
+
+    Captures whether the pipeline learned the right *changes*, not just
+    the right average structures — the failure mode invisible to
+    per-regime SHD.
+    """
+    boundaries = [0] + list(true_cps) + [T]
+    regime_spans = list(zip(boundaries[:-1], boundaries[1:]))
+    n_reg = len(regime_spans)
+    if n_reg < 2 or p < 2:
+        return 0.0
+
+    # Align each true regime to the best-overlap structure
+    aligned = []
+    for rs, re in regime_spans:
+        _, best = _best_overlap_struct(structures, rs, re)
+        aligned.append(best)
+
+    max_edges = p * (p - 1)
+    total = 0.0
+    n_trans = 0
+
+    for k in range(n_reg - 1):
+        if k >= len(true_adjs) or k + 1 >= len(true_adjs):
+            continue
+        true_curr = _bin_adj(true_adjs[k])
+        true_next = _bin_adj(true_adjs[k + 1])
+        true_delta = true_curr ^ true_next
+
+        if aligned[k] is None or aligned[k + 1] is None:
+            pred_delta = np.zeros_like(true_delta)
+        else:
+            pred_curr = _bin_adj(aligned[k].adjacency_matrix)
+            pred_next = _bin_adj(aligned[k + 1].adjacency_matrix)
+            pred_delta = pred_curr ^ pred_next
+
+        diff = int(np.sum(true_delta != pred_delta))
+        total += diff / max_edges
+        n_trans += 1
+
+    return float(total / n_trans) if n_trans else 0.0
+
+
+def dynamic_score(
+    windowed_nshd: float,
+    detection_f1: float,
+    coverage: float,
+    alpha: float = 0.4,
+    beta: float = 0.3,
+    gamma: float = 0.3,
+) -> float:
+    """
+    Composite score blending structural error, detection F1, and coverage.
+
+    score = α · windowed_nshd + β · (1 - detection_f1) + γ · (1 - coverage)
+
+    All inputs are in [0, 1]; output in [0, 1] with lower = better.
+    Default weights put structure first (0.4), changepoint F1 and coverage
+    equal (0.3 each), reflecting that without coverage the structural
+    score loses its meaning.
+    """
+    s = alpha * windowed_nshd + beta * (1.0 - detection_f1) + gamma * (1.0 - coverage)
+    return float(np.clip(s, 0.0, 1.0))
+
+
 def compute_detection_summary(
     results: List[EvaluationResult],
 ) -> Dict[str, float]:
