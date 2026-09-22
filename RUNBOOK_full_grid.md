@@ -172,10 +172,20 @@ python run_experiments.py --dataset_dir datasets --output_dir /tmp/cal \
 
 ## 5. Interruptions
 
-Both arms pass `--resume`. `run_experiments.py` checkpoints `results.csv` every
-`--batch_size` scenarios (200 here, ~1% of the grid); on resume it reads back
-the scenario ids already present, skips them, and carries their rows into the
-new file. Re-running a finished arm is a no-op.
+Both arms pass `--resume`. `run_experiments.py` **appends** to `results.csv`
+every `--batch_size` scenarios (10 here) and drops the batch, so memory holds
+one batch rather than the whole result set and the file is written once rather
+than rewritten at every checkpoint. On resume it reads back only the
+`scenario_id` column, skips those ids and keeps appending to the same file.
+Re-running a finished arm is a no-op.
+
+At 18,000 scenarios of ~459 bytes the final file is ~8 MB. Rewriting it whole at
+every checkpoint — what the runner did before — would have meant 7.4 GB of
+cumulative writes at `batch_size=10` (0.38 GB at 200); appending writes 8 MB.
+
+Error rows carry only the 10 identifying keys while ok rows carry all 78, so
+every row is reindexed onto the header before being appended. The header is
+locked to the first ok row, and rows stay buffered until one appears.
 
 So after any crash, reboot or OOM, the recovery is simply:
 
@@ -183,7 +193,7 @@ So after any crash, reboot or OOM, the recovery is simply:
 ./run_full_grid.sh
 ```
 
-Losses are bounded by one batch — at most 200 scenarios.
+Losses are bounded by one batch — at most 10 scenarios.
 
 Note that resume skips a scenario by id regardless of its `status`, so a
 scenario that already failed is *not* retried. That is deliberate — these

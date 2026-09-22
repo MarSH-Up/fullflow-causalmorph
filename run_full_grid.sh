@@ -21,7 +21,7 @@ cd "$HERE"
 
 PYTHON="${PYTHON:-python}"
 WORKERS="${WORKERS:-12}"
-BATCH_SIZE="${BATCH_SIZE:-200}"
+BATCH_SIZE="${BATCH_SIZE:-10}"
 DATASET_DIR="${DATASET_DIR:-datasets}"
 ARMS="${ARMS:-both}"
 LOG_DIR="results/logs"
