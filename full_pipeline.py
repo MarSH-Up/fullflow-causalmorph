@@ -41,6 +41,7 @@ from detectors.detectors_wavelets import (
     get_moment_weights,
 )
 from detectors.detectors_correlation import detect_correlation_changes
+from detectors.detectors_coherence import detect_coherence_changes
 from core.causalmorph_algorithm import causalMorph
 from evaluation.metrics import evaluate_detection, simplify_transitions
 
@@ -389,6 +390,12 @@ def detect_change_points(
               CPs that wavelet energy moments miss); v1G is fallback when
               correlation finds no CPs at all. On p=5 benchmark: F1 0.65 →
               0.78 (+20%), recall 0.64 → 0.97.
+      "v1I" — ensemble: v1G + wavelet-coherence-based detector.
+              Generalises v1H by replacing Pearson correlation with squared
+              wavelet coherence (Grinsted et al., 2004) — frequency-resolved
+              joint-distribution measure between channels. Follows Felipe's
+              suggestion that coherence is a better indicator than plain
+              correlation for structural change.
 
     Returns the full DetectionResult (used for the diagnostic plot).
     """
@@ -407,7 +414,7 @@ def detect_change_points(
     step_win = max(100, min_regime_len // 5)   # 500→100, 2500→500, 5000→1000
     ch_win   = max(160, min_regime_len // 5)   # 500→160, 2500→500, 5000→1000
 
-    if detector_version in ("v1G", "v1H"):    # v1H uses v1G as its wavelet base detector
+    if detector_version in ("v1G", "v1H", "v1I"):  # v1H/v1I use v1G as their wavelet base
         result = detect_nonstationarity_v1G(
             X,
             baseline_idx,
@@ -483,7 +490,139 @@ def detect_change_points(
         result.offset_points = []
         result.change_points = fused
 
+    if detector_version == "v1I":
+        # v1I detector: wavelet-coherence-based change-point detection.
+        # Drop-in replacement for v1H's correlation step — the joint signal
+        # between channels is measured by squared wavelet coherence at each
+        # scale (Morlet CWT) and averaged across scales, then Frobenius
+        # distance between past/future coherence matrices is the change
+        # signal.
+        #
+        # Why this is the right move (Felipe's suggestion): correlation
+        # collapses all frequency content into one band-integrated number
+        # and assumes stationarity inside each window. Wavelet coherence
+        # resolves the joint structure across scales and is naturally
+        # non-stationary — matching the substrate already used by v1G.
+        #
+        # v1G is still computed and returned in the DetectionResult so
+        # downstream code (plots, events, severity) has the wavelet
+        # diagnostics. Only the change-point list is replaced.
+        coh_window = max(50, min_regime_len // 5)
+        coh_cps, _, _ = detect_coherence_changes(
+            X,
+            window=coh_window,
+            refractory_period=refractory,
+            edge_margin=coh_window,
+            baseline_idx=baseline_idx,
+            threshold_mad_k=6.0,        # mirrors v1H strictness
+            min_threshold=0.15,         # lower floor: coherence is in [0,1] not [-1,1]
+        )
+
+        if len(coh_cps) > 0:
+            fused = sorted(set(coh_cps))
+        else:
+            fused = sorted(set(result.onset_points) | set(result.offset_points))
+
+        result.onset_points = fused
+        result.offset_points = []
+        result.change_points = fused
+
     return result
+
+
+# ── Bootstrap edge stability helper ──────────────────────────────────────────
+def _bootstrap_fit(
+    window_df: pd.DataFrame,
+    variable_names: List[str],
+    use_cm: bool,
+    prior_order: Optional[List[int]],
+    prior_adj: Optional[pd.DataFrame],
+    n_boot: int,
+    threshold: float,
+    seed_base: int,
+):
+    """
+    Fit DirectLiNGAM (optionally preceded by CausalMorph) on N bootstrap
+    subsamples of `window_df`, aggregate by per-edge frequency.
+
+    For each bootstrap b ∈ [0, n_boot):
+      • Sample len(window_df) rows with replacement (rng seeded by b).
+      • If use_cm, apply CausalMorph with (prior_order, prior_adj).
+      • Fit DirectLiNGAM on the (possibly transformed) sample.
+      • Record binarised edges (|w| > 0.05) and the inferred causal order.
+
+    Returns
+    -------
+    final_order : List[int]
+        Most frequent causal order across successful bootstraps.
+    adj_df      : pd.DataFrame
+        Binary {0,1} consensus adjacency — edges with frequency ≥ threshold.
+    edge_probs  : np.ndarray
+        Per-edge bootstrap frequency (∈ [0,1]); useful for downstream weighting.
+
+    Falls back to a single non-bootstrap fit if every bootstrap raises.
+    """
+    p = window_df.shape[1]
+    edge_counts = np.zeros((p, p))
+    order_counts: Dict[tuple, int] = {}
+    n_ok = 0
+
+    n = len(window_df)
+    for b in range(n_boot):
+        rng = np.random.default_rng(seed_base + b * 7919)
+        idx = rng.integers(0, n, size=n)
+        sample_df = window_df.iloc[idx].reset_index(drop=True)
+
+        if use_cm and prior_order is not None and prior_adj is not None:
+            try:
+                fit_df = causalMorph(
+                    sample_df, causal_order=prior_order,
+                    adjacency_matrix=prior_adj, verbose=False,
+                )
+            except Exception:
+                fit_df = sample_df
+        else:
+            fit_df = sample_df
+
+        model = DirectLiNGAM()
+        try:
+            model.fit(fit_df)
+        except Exception:
+            continue
+        adj_bin = (np.abs(model.adjacency_matrix_) > 0.05).astype(float)
+        np.fill_diagonal(adj_bin, 0.0)
+        edge_counts += adj_bin
+        key = tuple(model.causal_order_)
+        order_counts[key] = order_counts.get(key, 0) + 1
+        n_ok += 1
+
+    if n_ok == 0:
+        # All bootstraps failed → single fit fallback on full window.
+        if use_cm and prior_order is not None and prior_adj is not None:
+            try:
+                fit_df = causalMorph(
+                    window_df, causal_order=prior_order,
+                    adjacency_matrix=prior_adj, verbose=False,
+                )
+            except Exception:
+                fit_df = window_df
+        else:
+            fit_df = window_df
+        model = DirectLiNGAM()
+        model.fit(fit_df)
+        adj_bin = (np.abs(model.adjacency_matrix_) > 0.05).astype(float)
+        np.fill_diagonal(adj_bin, 0.0)
+        edge_probs = adj_bin
+        adj_consensus = adj_bin
+        final_order = list(model.causal_order_)
+    else:
+        edge_probs = edge_counts / n_ok
+        np.fill_diagonal(edge_probs, 0.0)
+        adj_consensus = (edge_probs >= threshold).astype(float)
+        final_order = list(max(order_counts.items(), key=lambda kv: kv[1])[0])
+
+    adj_df = pd.DataFrame(adj_consensus, columns=variable_names, index=variable_names)
+    return final_order, adj_df, edge_probs
 
 
 # ── Step 3: Iterative CausalMorph structure extraction ───────────────────────
@@ -497,6 +636,9 @@ def extract_causal_structures(
     verbose: bool = True,
     prior_mode: str = "chain",
     hybrid: bool = False,
+    bootstrap_n: int = 0,
+    bootstrap_threshold: float = 0.60,
+    chain_prior_edge_threshold: float = 0.10,
 ) -> List[RegimeStructure]:
     """
     Iteratively extract causal structures from every detected regime window.
@@ -514,6 +656,22 @@ def extract_causal_structures(
       better independence). Cold wins only if it beats warm by > _HYBRID_MARGIN.
       The chosen fit, both scores, and which was picked are stored in
       RegimeStructure (.chosen, .score_warm, .score_cold).
+
+    bootstrap_n : int
+      If > 0, fit each window via N bootstrap resamples and aggregate by
+      per-edge frequency.  Final edges are those present in ≥
+      `bootstrap_threshold` fraction of successful bootstraps.  Reduces
+      spurious edges from single-fit estimator noise — particularly valuable
+      for chain-prior mode where one regime's noisy edges propagate forward.
+
+    bootstrap_threshold : float
+      Per-edge frequency threshold (default 0.60).  Higher = more
+      conservative (precision-favouring).
+
+    chain_prior_edge_threshold : float
+      Edge weight threshold used when binarising the current adjacency
+      before passing it as a chain prior to the next regime (default 0.10,
+      previously 0.05).  Slightly higher to reduce error cascade.
 
     window_overlap : fraction of the previous window to prepend to each window.
     """
@@ -591,55 +749,77 @@ def extract_causal_structures(
                 order_names = [variable_names[i] for i in prev_causal_order]
                 print(f"    Using chained prior from regime {regime_idx - 1}:  order={' -> '.join(order_names)}")
 
-        # ── Apply CausalMorph ────────────────────────────────────────────────
-        if verbose:
-            print("    Applying CausalMorph...")
-        try:
-            transformed = causalMorph(
-                window_df,
-                causal_order=causal_order_prior,
-                adjacency_matrix=adj_prior,
-                verbose=False,
-            )
-        except Exception as exc:
-            if verbose:
-                print(f"    CausalMorph raised {type(exc).__name__}: {exc}")
-                print("    Falling back to raw window data.")
-            transformed = window_df
-
-        # ── Fit LiNGAM on transformed (warm) data ───────────────────────────
-        if verbose:
-            print("    Fitting DirectLiNGAM on transformed data (warm)...")
-        model_warm = DirectLiNGAM()
-        model_warm.fit(transformed)
-        adj_warm = pd.DataFrame(
-            model_warm.adjacency_matrix_,
-            columns=variable_names,
-            index=variable_names,
-        )
-
-        # ── Hybrid model selection ───────────────────────────────────────────
         X_raw = window_df.values
-        if hybrid:
+
+        # ── Warm path (CausalMorph + DirectLiNGAM) ──────────────────────────
+        if bootstrap_n > 0:
             if verbose:
-                print("    Fitting DirectLiNGAM on raw data (cold)...")
-            model_cold_h = DirectLiNGAM()
-            model_cold_h.fit(window_df)
-            adj_cold_h = pd.DataFrame(
-                model_cold_h.adjacency_matrix_,
+                print(f"    Warm path: bootstrap (N={bootstrap_n}, edge_thr={bootstrap_threshold})...")
+            warm_order, adj_warm, _ = _bootstrap_fit(
+                window_df, variable_names,
+                use_cm=True,
+                prior_order=causal_order_prior, prior_adj=adj_prior,
+                n_boot=bootstrap_n, threshold=bootstrap_threshold,
+                seed_base=regime_idx * 100003,
+            )
+        else:
+            if verbose:
+                print("    Applying CausalMorph...")
+            try:
+                transformed = causalMorph(
+                    window_df,
+                    causal_order=causal_order_prior,
+                    adjacency_matrix=adj_prior,
+                    verbose=False,
+                )
+            except Exception as exc:
+                if verbose:
+                    print(f"    CausalMorph raised {type(exc).__name__}: {exc}")
+                    print("    Falling back to raw window data.")
+                transformed = window_df
+            if verbose:
+                print("    Fitting DirectLiNGAM on transformed data (warm)...")
+            model_warm = DirectLiNGAM()
+            model_warm.fit(transformed)
+            adj_warm = pd.DataFrame(
+                model_warm.adjacency_matrix_,
                 columns=variable_names,
                 index=variable_names,
             )
+            warm_order = list(model_warm.causal_order_)
+
+        # ── Hybrid model selection ───────────────────────────────────────────
+        if hybrid:
+            if bootstrap_n > 0:
+                if verbose:
+                    print(f"    Cold path: bootstrap (N={bootstrap_n}, edge_thr={bootstrap_threshold})...")
+                cold_order, adj_cold_h, _ = _bootstrap_fit(
+                    window_df, variable_names,
+                    use_cm=False, prior_order=None, prior_adj=None,
+                    n_boot=bootstrap_n, threshold=bootstrap_threshold,
+                    seed_base=regime_idx * 100003 + 50000,
+                )
+            else:
+                if verbose:
+                    print("    Fitting DirectLiNGAM on raw data (cold)...")
+                model_cold_h = DirectLiNGAM()
+                model_cold_h.fit(window_df)
+                adj_cold_h = pd.DataFrame(
+                    model_cold_h.adjacency_matrix_,
+                    columns=variable_names,
+                    index=variable_names,
+                )
+                cold_order = list(model_cold_h.causal_order_)
             s_warm = _residual_indep_score(adj_warm.values, X_raw)
             s_cold = _residual_indep_score(adj_cold_h.values, X_raw)
             if s_cold < s_warm - _HYBRID_MARGIN:
                 chosen_fit = "cold"
                 adj_final = adj_cold_h
-                final_order = model_cold_h.causal_order_
+                final_order = cold_order
             else:
                 chosen_fit = "warm"
                 adj_final = adj_warm
-                final_order = model_warm.causal_order_
+                final_order = warm_order
             if verbose:
                 tag = f"→ chose {chosen_fit}  (s_warm={s_warm:.3f}, s_cold={s_cold:.3f})"
                 print(f"    Hybrid selection: {tag}")
@@ -648,7 +828,7 @@ def extract_causal_structures(
             s_cold = float("nan")
             chosen_fit = "n/a"
             adj_final = adj_warm
-            final_order = model_warm.causal_order_
+            final_order = warm_order
 
         struct = RegimeStructure(
             regime_idx=regime_idx,
@@ -668,8 +848,12 @@ def extract_causal_structures(
         prev_causal_order = final_order
         # Binarize before using as CausalMorph prior — CausalMorph uses != 0
         # to determine parents, so raw float weights would make every variable
-        # a parent of every other (same approach as basic_usage.py: binary adj)
-        prev_adj_matrix = (np.abs(adj_final.values) > 0.05).astype(float)
+        # a parent of every other (same approach as basic_usage.py: binary adj).
+        # Threshold raised from 0.05 → 0.10 (configurable) to reduce error
+        # cascade: only edges with sufficient weight propagate to the next
+        # regime's prior.  Bootstrap-produced binary {0,1} adjacencies are
+        # unaffected by the threshold.
+        prev_adj_matrix = (np.abs(adj_final.values) > chain_prior_edge_threshold).astype(float)
         prev_adj_matrix = pd.DataFrame(prev_adj_matrix, columns=variable_names, index=variable_names)
 
         if verbose:
@@ -677,7 +861,7 @@ def extract_causal_structures(
             n_edges_bin = int(prev_adj_matrix.values.sum())
             order_names = [variable_names[i] for i in final_order]
             print(f"    Learned order: {' -> '.join(order_names)}")
-            print(f"    Edges found  : {n_edges_raw} raw, {n_edges_bin} after threshold (>0.05)")
+            print(f"    Edges found  : {n_edges_raw} raw, {n_edges_bin} after threshold (>{chain_prior_edge_threshold})")
             if regime_idx < len(windows) - 1:
                 print(f"    => {n_edges_bin} edges + order above will be prior for regime {regime_idx + 1}")
 

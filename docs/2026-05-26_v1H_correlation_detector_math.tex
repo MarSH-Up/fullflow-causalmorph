@@ -1,0 +1,462 @@
+% v1-H: Correlation-Based Change-Point Detector — Mathematical formulation
+% Author: Mario de los Santos
+% Date: 2026-05-26
+%
+% Build:   pdflatex 2026-05-26_v1H_correlation_detector_math.tex
+% Requires: amsmath, amssymb, mathtools, algorithm, algpseudocode, booktabs, hyperref, microtype
+
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{booktabs}
+\usepackage{microtype}
+\usepackage[hidelinks]{hyperref}
+\usepackage{xcolor}
+
+\newcommand{\Var}{\operatorname{Var}}
+\newcommand{\Cov}{\operatorname{Cov}}
+\newcommand{\corr}{\operatorname{corr}}
+\newcommand{\MAD}{\operatorname{MAD}}
+\newcommand{\med}{\operatorname{median}}
+\newcommand{\vectri}{\operatorname{vec}_{\triangle}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Real}{\mathbb{R}}
+
+\title{\textbf{v1-H: A Correlation-Based Change-Point Detector\\for Non-Stationary Causal Discovery}\\[4pt]
+\large Mathematical formulation}
+\author{Mario de los Santos}
+\date{2026-05-26}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We present \textsf{v1-H}, a sliding-window change-point detector that operates on the
+inter-channel Pearson correlation structure of a multivariate time series.
+The detector targets a specific class of structural change---causal-graph
+rewiring---for which the published wavelet multi-moment baseline
+(\textsf{v1-G}) is shown empirically to collapse at long regime lengths.
+Building on the second-order break-detection framework of
+Aue, Hörmann, Horváth \& Reimherr (2009), we adapt the
+statistic from covariance to Pearson correlation for scale invariance,
+replace asymptotic CUSUM testing with localized peak detection on a
+per-time-step Frobenius distance, and calibrate thresholds robustly via
+the median absolute deviation. This note documents the mathematical
+formulation: notation, the change signal, calibration, peak extraction,
+complexity, and an algebraic argument for why a correlation-shift statistic
+detects exactly the class of changes that a per-channel-moment statistic
+misses.
+\end{abstract}
+
+\section{Notation and setup}
+
+Let $X \in \R^{T \times N}$ denote a discrete-time multivariate process with
+$T$ samples and $N \ge 2$ channels. We model $X$ as a piecewise-stationary
+process: there exist unknown change points
+$0 < \tau_1 < \tau_2 < \cdots < \tau_K < T$ which partition the time axis
+into $K+1$ \emph{regimes}
+$R_0 = [0, \tau_1), R_1 = [\tau_1, \tau_2), \ldots, R_K = [\tau_K, T)$.
+Within each $R_k$ the joint distribution of $X[t,\cdot]$ is stationary; at
+each $\tau_k$ the underlying structural causal model (SCM) parameters change.
+
+In the linear non-Gaussian acyclic SCM framework (LiNGAM,
+Shimizu \emph{et al.}\ 2006), the parameters of regime $R_k$ consist of a
+directed acyclic graph $G_k$ over $\{V_1, \ldots, V_N\}$ together with
+edge weights $B_k \in \R^{N \times N}$, such that
+\[
+X[t, \cdot]^\top = B_k\, X[t, \cdot]^\top + \varepsilon^{(k)}, \qquad t \in R_k,
+\]
+with $\varepsilon^{(k)}$ a vector of mutually independent non-Gaussian
+exogenous noises. A structural change at $\tau_k$ corresponds to
+$B_{k-1} \ne B_k$, typically the addition or removal of one or more directed
+edges $V_i \to V_j$.
+
+\paragraph{Detection task.}
+Given $X$ and a baseline index set $\mathcal{B} \subset \{0, 1, \ldots, T-1\}$
+known to lie within $R_0$, output a detected change-point set
+$\widehat{\mathcal{T}} = \{\hat\tau_1, \ldots, \hat\tau_{\hat K}\}$.
+
+\section{The change signal}
+
+\subsection{Pairwise correlation matrices}
+
+For a window size $W$ and an interior time $t \in [W,\, T - W)$, define the
+\emph{past} and \emph{future} windows
+\begin{equation}
+X_{\text{past}}(t) = X[t - W : t,\ \cdot]
+\qquad
+X_{\text{future}}(t) = X[t : t + W,\ \cdot].
+\end{equation}
+
+The associated Pearson correlation matrices
+$C_{\text{past}}(t), C_{\text{future}}(t) \in \R^{N \times N}$
+have entries
+\begin{equation}
+C_{\text{past}}(t)_{ij}
+= \frac{\sum_{s = t - W}^{t - 1}\!\big(X[s,i] - \bar X_i^{\text{past}}\big)\big(X[s,j] - \bar X_j^{\text{past}}\big)}
+{\,\hat\sigma_i^{\text{past}}\, \hat\sigma_j^{\text{past}}\,},
+\end{equation}
+where $\bar X_i^{\text{past}}$ and $\hat\sigma_i^{\text{past}}$ are the sample
+mean and standard deviation of channel $i$ in $X_{\text{past}}(t)$; the
+definition of $C_{\text{future}}(t)$ is analogous. Both matrices are
+symmetric with unit diagonal, so the structural information they carry
+lives in the $M = \binom{N}{2}$ strictly-upper-triangular entries. We
+vectorize:
+\begin{equation}
+c_{\text{past}}(t) = \vectri\!\big(C_{\text{past}}(t)\big) \in \R^{M},
+\qquad
+c_{\text{future}}(t) = \vectri\!\big(C_{\text{future}}(t)\big) \in \R^{M}.
+\end{equation}
+
+\subsection{Definition of the change signal}
+
+The change signal at time $t$ is the Euclidean distance between past and
+future correlation fingerprints:
+\begin{equation}
+\boxed{\;
+S(t) \;=\; \big\| c_{\text{future}}(t) - c_{\text{past}}(t) \big\|_2
+\;=\; \sqrt{\sum_{1 \le i < j \le N}\!\big(C_{\text{future}}(t)_{ij} - C_{\text{past}}(t)_{ij}\big)^2}.
+\;}
+\label{eq:change-signal}
+\end{equation}
+
+Equivalently, in terms of the Frobenius norm of the matrix difference
+(noting that the off-diagonal entries appear twice and the diagonal is
+identically zero since $C_{ii} \equiv 1$):
+\begin{equation}
+S(t) \;=\; \frac{1}{\sqrt{2}}\, \big\| C_{\text{future}}(t) - C_{\text{past}}(t) \big\|_F.
+\end{equation}
+
+\subsection{Properties of $S(t)$}
+
+\paragraph{P1.\ Vanishing under stationarity.}
+If the joint distribution of $X$ is stationary on $[t - W, t + W]$, then
+$c_{\text{past}}(t)$ and $c_{\text{future}}(t)$ are i.i.d.\ unbiased estimates
+of the population correlation vector $c^\star$. By the multivariate
+central limit theorem applied to the sample correlations,
+\begin{equation}
+\sqrt{W}\,\big(c_{\text{past}}(t) - c^\star\big)
+\xrightarrow{\,d\,} \mathcal{N}(0,\ \Sigma_c),
+\end{equation}
+with $\Sigma_c$ depending on the population fourth-order moments. Hence
+$\big\| c_{\text{future}}(t) - c_{\text{past}}(t) \big\|_2$ is
+$\mathcal{O}_p(W^{-1/2})$ under the null hypothesis of local stationarity.
+
+\paragraph{P2.\ Localized peak at change points.}
+Suppose $\tau \in (W, T - W)$ is a change point and $W$ is small enough that
+$X_{\text{past}}(\tau)$ lies entirely within $R_{k-1}$ and
+$X_{\text{future}}(\tau)$ entirely within $R_k$. Then
+\begin{equation}
+\E\!\big[S(\tau)\big] \;\to\; \big\| c^{(k)} - c^{(k-1)} \big\|_2
+\quad \text{as } W \to \infty,
+\end{equation}
+the deterministic Euclidean distance between the regime-$k-1$ and regime-$k$
+population correlation vectors. For $|t - \tau| > W$, both windows lie in
+the same regime and $S(t) = \mathcal{O}_p(W^{-1/2})$. Therefore $S$ exhibits
+a peak with finite expected height (independent of $W$, for $W$ large) at
+each $\tau_k$, against a background of $\mathcal{O}(W^{-1/2})$ noise.
+
+\paragraph{P3.\ Affine scale invariance.}
+Under the channelwise affine transformation $X_i \mapsto a_i X_i + b_i$
+with $a_i \ne 0$, both $C_{\text{past}}(t)$ and $C_{\text{future}}(t)$ are
+invariant, hence so is $S(t)$. This property is critical for the LiNGAM
+setting where the per-regime noise variance varies as a design choice;
+covariance-based statistics would conflate this with structural change.
+
+\section{Why correlation detects what per-channel moments miss}
+
+We give an algebraic argument for the central claim of v1-H: that
+\emph{causal-graph rewiring} produces a first-order shift in the
+inter-channel correlation but only a second-order shift in per-channel
+moments. Consider a linear-Gaussian SCM with all channels normalized to
+unit variance, and suppose a single edge $V_i \to V_j$ of weight $\beta$
+is added at change point $\tau$. The reduced form for $V_j$ at $t < \tau$ is
+\begin{equation}
+V_j = \sum_{k \in \mathrm{pa}_{j,k-1}} \beta_{kj}\, V_k + \varepsilon_j,
+\end{equation}
+and at $t > \tau$ gains an additional term:
+\begin{equation}
+V_j = \beta\, V_i + \sum_{k \in \mathrm{pa}_{j,k-1}} \beta_{kj}\, V_k + \varepsilon_j.
+\end{equation}
+
+\paragraph{Per-channel mean.}
+\begin{equation}
+\E[V_j \mid t > \tau] - \E[V_j \mid t < \tau] \;=\; \beta \cdot \E[V_i].
+\end{equation}
+For zero-mean centred channels, $\E[V_i] = 0$, so the marginal-mean shift is
+\emph{exactly zero} regardless of $\beta$.
+
+\paragraph{Per-channel variance.}
+\begin{align}
+\Delta \Var(V_j)
+&= \Var(V_j \mid t > \tau) - \Var(V_j \mid t < \tau) \nonumber \\
+&= \beta^2 \Var(V_i) + 2\beta \sum_{k \in \mathrm{pa}_{j,k-1}} \beta_{kj}\,\Cov(V_k, V_i).
+\end{align}
+The leading term is $\mathcal{O}(\beta^2)$, modulated by the existing
+covariance structure.
+
+\paragraph{Pairwise correlation.}
+Under the unit-variance normalization (which is achieved post-hoc by the
+correlation operation itself):
+\begin{equation}
+\corr(V_i, V_j \mid t > \tau) - \corr(V_i, V_j \mid t < \tau)
+\;\approx\; \beta \cdot \sqrt{\frac{\Var(V_i)}{\Var(V_j)}}\,.
+\end{equation}
+The shift is $\mathcal{O}(\beta)$, with a constant of order $1$ for
+similarly-scaled channels.
+
+\paragraph{Implication.}
+A detector that integrates per-channel moments---such as the multi-moment
+wavelet detector (v1-G), which sums squared wavelet coefficients of mean,
+variance, skewness, and kurtosis time series---has sensitivity proportional
+to the $\mathcal{O}(\beta^2)$ variance shift and smaller-order shifts in
+the higher moments. The correlation-shift statistic in
+Eq.~\eqref{eq:change-signal} has sensitivity proportional to the
+$\mathcal{O}(\beta)$ correlation shift. For typical edge weights
+$\beta \in [0.5, 1.5]$ in the benchmark, this is an order-of-magnitude
+advantage at the change point.
+
+\section{MAD-based threshold calibration}
+
+Let $\mathcal{B} \subset \{0, 1, \ldots, T-1\}$ be a baseline index set
+restricted to within-regime indices in $R_0$. Define
+\begin{align}
+\mu_{\text{med}} &= \med\!\big(\{S(t) : t \in \mathcal{B}\}\big), \\
+\MAD\,(\mathcal{B}) &= \med\!\big(\{|S(t) - \mu_{\text{med}}| : t \in \mathcal{B}\}\big), \\
+\hat\sigma_S &= 1.4826 \cdot \MAD\,(\mathcal{B}).
+\end{align}
+
+The scale factor $1.4826 = 1/\Phi^{-1}(0.75)$, where $\Phi$ is the standard
+normal CDF, ensures that $\hat\sigma_S$ is an asymptotically unbiased
+estimator of $\mathrm{SD}(S)$ when $S$ is Gaussian on $\mathcal{B}$.
+
+The peak-detection threshold is
+\begin{equation}
+\boxed{\;
+\theta \;=\; \max\!\big(\,\mu_{\text{med}} + k \cdot \hat\sigma_S,\;\; \tau_{\min}\,\big),
+\;}
+\end{equation}
+with strictness hyperparameter $k > 0$ and floor $\tau_{\min} \ge 0$.
+v1-H uses $k = 6.0$ and $\tau_{\min} = 0.5$.
+
+\paragraph{Why MAD rather than mean$\,+\,$standard deviation?}
+The mean$\,+\,$SD estimator has a breakdown point of $0$: a single outlier
+in $\mathcal{B}$ (for example a missed change point inadvertently included in
+the baseline) inflates $\hat\sigma_S$ arbitrarily. MAD has breakdown point
+$0.5$. This robustness matters because we cannot test the
+baseline-stationarity assumption ahead of time.
+
+\paragraph{Why MAD rather than the asymptotic distribution of Aue et al.?}
+The CUSUM-based test in Aue \emph{et al.}\ (2009) derives its threshold
+from the asymptotic null distribution of the cumulative-deviation
+statistic, under regularity assumptions (mixing rates, finite higher-order
+moments). These assumptions are non-trivial to verify in practice. MAD
+calibration is fully empirical: it adapts to whatever noise level the
+particular series exhibits, without distributional commitments.
+
+\section{Peak detection and refractory enforcement}
+
+Given $\theta$ and the change signal $S$, candidate change points are
+strict local maxima of $S$ exceeding $\theta$:
+\begin{equation}
+\widehat{\mathcal{T}}_0
+= \big\{\,t \in [W, T-W) :\ S(t-1) < S(t),\ S(t+1) < S(t),\ S(t) \ge \theta\,\big\}.
+\end{equation}
+
+A refractory constraint $\rho > 0$ enforces a minimum temporal separation
+between accepted change points, preventing a single physical CP from being
+detected as several adjacent peaks. We greedily retain the strongest peak
+within each window of width $\rho$:
+\begin{equation}
+\widehat{\mathcal{T}}
+= \mathrm{NMS}_{\rho}\!\big(\widehat{\mathcal{T}}_0;\, S\big),
+\end{equation}
+where $\mathrm{NMS}_{\rho}$ denotes the standard non-maximum-suppression
+operation: iteratively select the highest-$S$ peak not yet selected, then
+discard all candidates within $[\hat\tau - \rho, \hat\tau + \rho]$.
+This is the canonical implementation provided by
+\texttt{scipy.signal.find\_peaks(S, height=$\theta$, distance=$\rho$)}.
+
+\section{Window-size and refractory scaling}
+
+Rather than fix $W$ and $\rho$ as global constants, we scale both with the
+minimum expected regime length $L_{\min}$:
+\begin{align}
+W   &= \max\!\big(50,\ \lfloor L_{\min}/5 \rfloor\big), \\
+\rho &= \max\!\big(150,\ \lfloor L_{\min}/4 \rfloor\big).
+\end{align}
+
+This produces three operational regimes in the benchmark:
+\begin{center}
+\begin{tabular}{rrrrr}
+\toprule
+$L_{\min}$ & $W$ & $\rho$ & samples in $S$ & max $\hat K$ \\
+\midrule
+500   & 100 & 150  & $\sim T - 200$  & $\le T / 150$ \\
+1500  & 300 & 375  & $\sim T - 600$  & $\le T / 375$ \\
+2500  & 500 & 625  & $\sim T - 1000$ & $\le T / 625$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The window must be large enough that the empirical correlation estimates
+have low variance (Property P2) but small enough to keep the regime-pair
+assumption clean (the past window must lie in one regime, the future
+window in the next).
+
+\section{Algorithm}
+
+\begin{algorithm}[H]
+\caption{v1-H: correlation-based change-point detection}
+\label{alg:v1h}
+\begin{algorithmic}[1]
+\Require Multivariate series $X \in \R^{T \times N}$; baseline indices
+         $\mathcal{B}$; minimum regime length $L_{\min}$; strictness $k$;
+         floor $\tau_{\min}$
+\Ensure  Detected change-point set $\widehat{\mathcal{T}}$
+\Statex
+\State $W \gets \max(50,\ \lfloor L_{\min}/5 \rfloor)$
+\State $\rho \gets \max(150,\ \lfloor L_{\min}/4 \rfloor)$
+\State $S \gets \mathbf{0}_T$
+\For{$t = W$ \textbf{to} $T - W - 1$}
+   \State $C_p \gets \mathrm{corrcoef}\big(X[t-W:t,\cdot]\big)$
+   \State $C_f \gets \mathrm{corrcoef}\big(X[t:t+W,\cdot]\big)$
+   \State $\Delta c \gets \vectri(C_f) - \vectri(C_p)$ \Comment{$M = \binom{N}{2}$ entries}
+   \State $S[t] \gets \|\Delta c\|_2$
+\EndFor
+\Statex
+\State $\mu \gets \med\!\big(\{S[t] : t \in \mathcal{B}\}\big)$
+\State $\hat\sigma \gets 1.4826 \cdot \med\!\big(\{|S[t] - \mu| : t \in \mathcal{B}\}\big)$
+\State $\theta \gets \max\!\big(\mu + k\,\hat\sigma,\ \tau_{\min}\big)$
+\Statex
+\State $\widehat{\mathcal{T}} \gets \mathrm{find\_peaks}(S,\ \text{height} = \theta,\ \text{distance} = \rho)$
+\State Discard $\hat\tau \in [0, W) \cup [T - W, T)$
+\State \Return $\widehat{\mathcal{T}}$
+\end{algorithmic}
+\end{algorithm}
+
+\section{Computational complexity}
+
+The dominant cost is the per-time-step correlation-matrix computation in
+the main loop (lines 4--8 of Algorithm~\ref{alg:v1h}):
+\begin{equation}
+\mathcal{O}\big(T \cdot W \cdot N^2\big).
+\end{equation}
+Each of the $T - 2W$ interior time steps reduces a $W \times N$ data block
+to an $N \times N$ correlation matrix, which costs $\mathcal{O}(W N^2)$ via
+the standard outer-product formulation. For our benchmark
+($T \le 1.5 \times 10^4$, $W \le 500$, $N \le 12$), a single scenario runs
+in under one second on a single CPU core.
+
+For very long series, an $\mathcal{O}(T N^2)$ implementation is achievable
+by maintaining running sums of $X_i$, $X_j$, and $X_i X_j$ across the
+sliding window and updating them incrementally as $t$ advances. We have
+not implemented this optimization because the benchmark does not require it.
+
+\section{Differences from Aue \emph{et al.}\ (2009)}
+
+\begin{table}[ht]
+\centering
+\small
+\begin{tabular}{p{0.32\linewidth} p{0.30\linewidth} p{0.30\linewidth}}
+\toprule
+\textbf{Aspect} & \textbf{Aue \emph{et al.}\ (2009)} & \textbf{v1-H} \\
+\midrule
+Second-order object &
+  Empirical covariance &
+  Pearson correlation \\
+Scale invariance &
+  No (depends on channel scaling) &
+  Yes (Property P3) \\
+Test statistic &
+  CUSUM of partial sums &
+  Pointwise Frobenius distance (Eq.~\ref{eq:change-signal}) \\
+Detection scheme &
+  Asymptotic threshold $+$ binary segmentation &
+  MAD-calibrated peak detection (single pass) \\
+Multiple change points &
+  Recursive splits &
+  Native via \texttt{find\_peaks} \\
+Threshold derivation &
+  Asymptotic null distribution &
+  Empirical via MAD on baseline \\
+Distribution assumption &
+  Mixing, finite higher moments &
+  Robust to baseline outliers; assumption-free \\
+Window size &
+  $T$-asymptotic, not specified for finite $T$ &
+  Empirically scaled with $L_{\min}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The two methods share the conceptual core: second-order structural shifts
+in a multivariate time series are diagnostic of regime change. v1-H trades
+the asymptotic theory of Aue \emph{et al.}\ for empirical robustness, single-pass
+operation, and scale invariance, all of which are properties we require
+for the detector to operate inside a downstream Bayesian causal-discovery
+pipeline.
+
+\section{Recommended hyperparameters}
+
+\begin{center}
+\small
+\begin{tabular}{lll}
+\toprule
+\textbf{Parameter} & \textbf{Value} & \textbf{Rationale} \\
+\midrule
+\texttt{threshold\_mad\_k} ($k$) & 6.0 & Strict threshold; prioritizes precision over recall \\
+\texttt{min\_threshold} ($\tau_{\min}$) & 0.5 & Absolute floor; rejects near-zero baseline drift \\
+\texttt{window} ($W$) & $\max(50,\ L_{\min}/5)$ & Balances variance vs.\ localization \\
+\texttt{refractory\_period} ($\rho$) & $\max(150,\ L_{\min}/4)$ & Matches downstream pipeline's expected regime length \\
+\texttt{edge\_margin} & $W$ & Excludes boundary-incomplete windows \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section*{Acknowledgements}
+
+The author thanks the supervising committee for guidance on framing
+empirical comparisons against the published CPD literature. All numerical
+results in companion documents were obtained on a controlled benchmark
+described in \texttt{generate\_datasets.py}; the implementation is
+in \texttt{NSD\_Wavelets/src/detectors/detectors\_correlation.py}.
+
+\begin{thebibliography}{9}
+
+\bibitem{aue2009}
+A.~Aue, S.~H\"ormann, L.~Horv\'ath, and M.~Reimherr.
+\newblock Break detection in the covariance structure of multivariate time series.
+\newblock \emph{Journal of Multivariate Analysis}, 2009.
+
+\bibitem{cribben2012}
+I.~Cribben, R.~Haraldsdottir, L.~Atlas, T.~Wager, and M.~Lindquist.
+\newblock Dynamic connectivity regression: determining state-related changes
+  in brain connectivity.
+\newblock \emph{NeuroImage}, 2012.
+
+\bibitem{truong2020}
+C.~Truong, L.~Oudre, and N.~Vayatis.
+\newblock Selective review of offline change point detection methods.
+\newblock \emph{Signal Processing}, 2020.
+
+\bibitem{harchaoui2009}
+Z.~Harchaoui, F.~Bach, and \'E.~Moulines.
+\newblock Kernel change-point analysis.
+\newblock \emph{Advances in Neural Information Processing Systems}, 2009.
+
+\bibitem{shimizu2006}
+S.~Shimizu, P.~O.~Hoyer, A.~Hyv\"arinen, and A.~Kerminen.
+\newblock A linear non-Gaussian acyclic model for causal discovery.
+\newblock \emph{Journal of Machine Learning Research}, 7:2003--2030, 2006.
+
+\end{thebibliography}
+
+\end{document}

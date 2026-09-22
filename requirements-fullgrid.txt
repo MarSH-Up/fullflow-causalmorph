@@ -1,0 +1,22 @@
+# Runtime dependencies for the full-grid extraction run (run_full_grid.sh).
+# Pinned to the versions of the local IYCC-env conda environment, which is the
+# one the 180-scenario subset results were produced with.
+#
+#   python -m venv .venv && . .venv/bin/activate
+#   pip install -r requirements-fullgrid.txt
+#
+# Python 3.11 (local env is 3.11.4). numpy is pinned <2 because lingam 1.9.1
+# and pandas 2.0.3 were built against the 1.x ABI.
+
+numpy==1.26.4
+pandas==2.0.3
+scipy==1.11.4
+scikit-learn==1.6.1
+networkx==3.4.2
+lingam==1.9.1
+matplotlib==3.7.2
+statsmodels==0.14.4
+
+# Not required: cdt and numba are imported only by causalmorph/utils/metrics.py
+# and causalmorph/synthetic_pipeline_mac.py, neither of which is on the
+# run_experiments.py code path (verified by inspecting sys.modules after a run).
