@@ -2,8 +2,9 @@
 Experiment runner for Full Pipeline.
 
 Loads pre-generated scenarios from datasets/ (produced by generate_datasets.py),
-runs detection + CausalMorph + DirectLiNGAM + ICA-LiNGAM on each, and writes
-results.csv to output_dir, checkpointing every --batch_size scenarios.
+runs detection + CausalMorph + DirectLiNGAM + ICA-LiNGAM on each, and appends
+to results.csv in output_dir every --batch_size scenarios. Rows are flushed and
+dropped, so memory holds one batch rather than the whole result set.
 
 Output
 ------
@@ -504,12 +505,36 @@ def _print_global_summary(output_dir: str):
     print(f"{'='*70}")
 
 
+def _append_rows(rows: list, results_path: str, columns):
+    """
+    Append rows to results.csv, creating it with a header on first write.
+
+    Returns the canonical column list. Error rows carry only the 10 identifying
+    keys while ok rows carry all 78, so every row is reindexed onto `columns`
+    before writing and short rows become empty cells rather than shifted ones.
+    The header is locked to the first ok row seen; until one appears the rows
+    stay buffered, since an error row alone would fix a 10-column header for the
+    rest of the run.
+    """
+    if columns is None:
+        first_ok = next((r for r in rows if r.get("status") == "ok"), None)
+        if first_ok is None:
+            return None, rows          # keep buffering, schema still unknown
+        columns = list(first_ok.keys())
+
+    write_header = not os.path.exists(results_path)
+    (pd.DataFrame(rows)
+       .reindex(columns=columns)
+       .to_csv(results_path, mode="a", header=write_header, index=False))
+    return columns, []
+
+
 # ── Main batch runner ─────────────────────────────────────────────────────────
 
 def run_experiments(
     dataset_dir: str      = "datasets",
     output_dir: str       = "results",
-    batch_size: int       = 100,
+    batch_size: int       = 10,
     n_workers: int        = None,
     detector_version: str = "v1G",
     prior_mode: str       = "chain",
@@ -542,24 +567,26 @@ def run_experiments(
 
     os.makedirs(output_dir, exist_ok=True)
 
-    # Rows recovered from a previous, interrupted run (empty unless --resume).
-    done_rows    = []
+    # Rows already on disk are left there: --resume appends to the same file
+    # rather than reading it back, so memory never holds the whole result set.
     results_path = os.path.join(output_dir, "results.csv")
+    n_done       = 0
+    columns      = None     # canonical CSV header, locked once known
     if resume and os.path.exists(results_path):
-        prev = pd.read_csv(results_path)
-        if "scenario_id" in prev.columns and len(prev):
-            done_ids  = set(prev["scenario_id"].astype(str))
-            done_rows = prev.to_dict("records")
-            before    = len(index_df)
-            index_df  = index_df[~index_df["scenario_id"].astype(str).isin(done_ids)]
-            print(f"  resume: {before - len(index_df)} scenarios already done in "
-                  f"{results_path}, {len(index_df)} left")
+        columns  = list(pd.read_csv(results_path, nrows=0).columns)
+        done_ids = set(pd.read_csv(results_path, usecols=["scenario_id"],
+                                   dtype=str)["scenario_id"])
+        n_done   = len(done_ids)
+        before   = len(index_df)
+        index_df = index_df[~index_df["scenario_id"].astype(str).isin(done_ids)]
+        print(f"  resume: {before - len(index_df)} scenarios already done in "
+              f"{results_path}, {len(index_df)} left")
 
     scenarios = list(index_df.iterrows())
     total     = len(scenarios)
 
     if resume and total == 0:
-        print(f"  resume: nothing left to run — {len(done_rows)} rows already in {results_path}")
+        print(f"  resume: nothing left to run — {n_done} rows already in {results_path}")
         _print_global_summary(output_dir)
         return
 
@@ -583,9 +610,9 @@ def run_experiments(
         print(f"  p_filter    : {p_filter}")
     print()
 
-    t_global     = time.time()
-    all_rows     = list(done_rows)   # carries over rows recovered by --resume
-    group_buf    = []  # accumulates rows for the current batch_size progress group
+    t_global   = time.time()
+    group_buf  = []   # rows since the last flush; the only ones held in memory
+    n_written  = n_done
 
     with ProcessPoolExecutor(
         max_workers=n_workers,
@@ -613,7 +640,6 @@ def run_experiments(
         for done_count, future in enumerate(as_completed(future_to_sid), 1):
             sid = future_to_sid[future]
             row = future.result()
-            all_rows.append(row)
             group_buf.append(row)
 
             elapsed = time.time() - t_global
@@ -635,16 +661,20 @@ def run_experiments(
 
             if done_count % batch_size == 0:
                 _print_batch_summary(group_buf, done_count // batch_size - 1)
-                group_buf = []
-                pd.DataFrame(all_rows).to_csv(results_path, index=False)
-                print(f"  → checkpoint: {len(all_rows)} rows saved to {results_path}", flush=True)
+                columns, group_buf = _append_rows(group_buf, results_path, columns)
+                if not group_buf:
+                    n_written = n_done + done_count
+                    print(f"  → checkpoint: {n_written} rows in {results_path}", flush=True)
 
     if group_buf:
         _print_batch_summary(group_buf, total // batch_size)
+        # A tail that is still buffered because no ok row ever appeared is
+        # written on its own keys rather than dropped.
+        columns, group_buf = _append_rows(group_buf, results_path, columns)
+        if group_buf:
+            _append_rows(group_buf, results_path, list(group_buf[0].keys()))
 
-    # Final write — covers any tail group smaller than batch_size
-    pd.DataFrame(all_rows).to_csv(results_path, index=False)
-    print(f"\n  Final save: {len(all_rows)} rows → {results_path}")
+    print(f"\n  Final save: {n_done + total} rows → {results_path}")
 
     _print_global_summary(output_dir)
     print(f"\nTotal elapsed: {time.time() - t_global:.0f}s")
@@ -664,7 +694,7 @@ if __name__ == "__main__":
                         help="Directory with index.csv and scenario CSVs (default: datasets/)")
     parser.add_argument("--output_dir",     type=str,   default="results",
                         help="Directory to write results.csv (default: results/)")
-    parser.add_argument("--batch_size",     type=int,   default=100,
+    parser.add_argument("--batch_size",     type=int,   default=10,
                         help="Progress-reporting group size (default: 100)")
     parser.add_argument("--workers",        type=int,   default=None,
                         help="Parallel worker processes (default: cpu_count // 2)")
