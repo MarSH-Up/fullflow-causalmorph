@@ -2,8 +2,8 @@
 Experiment runner for Full Pipeline.
 
 Loads pre-generated scenarios from datasets/ (produced by generate_datasets.py),
-runs detection + CausalMorph + DirectLiNGAM + ICA-LiNGAM on each, and writes a
-single results.csv to output_dir only after ALL scenarios complete.
+runs detection + CausalMorph + DirectLiNGAM + ICA-LiNGAM on each, and writes
+results.csv to output_dir, checkpointing every --batch_size scenarios.
 
 Output
 ------
@@ -18,6 +18,7 @@ Usage
   python run_experiments.py --workers 64                 # explicit parallelism
   python run_experiments.py --batch_size 50              # smaller progress groups
   python run_experiments.py --p_filter 5                 # only p=5 scenarios
+  python run_experiments.py --resume                     # continue an interrupted run
   python run_experiments.py --dataset_dir my_data --output_dir my_results
 """
 
@@ -519,10 +520,15 @@ def run_experiments(
     chain_prior_threshold: float = 0.05,
     suppress_output: bool = True,
     p_filter: int         = None,
+    resume: bool          = False,
 ):
     """
-    Run all scenarios in dataset_dir/index.csv in parallel and write a single
-    results.csv to output_dir only after all scenarios complete.
+    Run all scenarios in dataset_dir/index.csv in parallel, checkpointing
+    results.csv to output_dir every batch_size scenarios.
+
+    With resume=True, scenarios already present in an existing results.csv are
+    skipped and their rows are carried into the new file, so an interrupted run
+    can be restarted without recomputing what it already finished.
     """
     index_path = os.path.join(dataset_dir, "index.csv")
     if not os.path.exists(index_path):
@@ -536,8 +542,26 @@ def run_experiments(
 
     os.makedirs(output_dir, exist_ok=True)
 
+    # Rows recovered from a previous, interrupted run (empty unless --resume).
+    done_rows    = []
+    results_path = os.path.join(output_dir, "results.csv")
+    if resume and os.path.exists(results_path):
+        prev = pd.read_csv(results_path)
+        if "scenario_id" in prev.columns and len(prev):
+            done_ids  = set(prev["scenario_id"].astype(str))
+            done_rows = prev.to_dict("records")
+            before    = len(index_df)
+            index_df  = index_df[~index_df["scenario_id"].astype(str).isin(done_ids)]
+            print(f"  resume: {before - len(index_df)} scenarios already done in "
+                  f"{results_path}, {len(index_df)} left")
+
     scenarios = list(index_df.iterrows())
     total     = len(scenarios)
+
+    if resume and total == 0:
+        print(f"  resume: nothing left to run — {len(done_rows)} rows already in {results_path}")
+        _print_global_summary(output_dir)
+        return
 
     if n_workers is None:
         n_workers = max(1, (os.cpu_count() or 2) // 2)
@@ -560,9 +584,8 @@ def run_experiments(
     print()
 
     t_global     = time.time()
-    all_rows     = []
+    all_rows     = list(done_rows)   # carries over rows recovered by --resume
     group_buf    = []  # accumulates rows for the current batch_size progress group
-    results_path = os.path.join(output_dir, "results.csv")
 
     with ProcessPoolExecutor(
         max_workers=n_workers,
@@ -672,6 +695,9 @@ if __name__ == "__main__":
                         help="Show per-run pipeline output (very noisy)")
     parser.add_argument("--p_filter",       type=int,   default=None,
                         help="Only run scenarios with this node count")
+    parser.add_argument("--resume",         action="store_true",
+                        help="Skip scenarios already present in output_dir/results.csv "
+                             "and keep their rows (restart an interrupted run)")
     args = parser.parse_args()
 
     run_experiments(
@@ -688,4 +714,5 @@ if __name__ == "__main__":
         chain_prior_threshold = args.chain_prior_threshold,
         suppress_output = not args.verbose,
         p_filter        = args.p_filter,
+        resume          = args.resume,
     )
