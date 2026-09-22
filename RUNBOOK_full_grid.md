@@ -105,8 +105,8 @@ results/logs/{baseline,winning,comparison,driver}.log
 
 ## 4. Expected runtime
 
-Cost model fitted on 18 scenarios timed individually on the main PC
-(14-core Apple Silicon), median in-sample error 26%:
+Cost model fitted on 18 scenarios timed individually on an M4 Max
+(10 performance + 4 efficiency cores, 36 GB), median in-sample error 26%:
 
 ```
 seconds ≈ 0.00086 · p^1.74 · R^1.13 · n^0.65
@@ -123,9 +123,42 @@ Summed over the grid, for the winning configuration:
 The baseline is 4–6× cheaper because it skips the 20 resamples per window
 (measured: 9.5 s vs 40.6 s at p9/R4/n2500; 32 s vs 135 s at p12/R7/n2500).
 
-**This is calibrated on the main PC, not the server.** Scale it by the server's
-per-core speed. Cost is concentrated in `p ≥ 10` and `R ≥ 6`: `p=12` alone is
-24 of the 109 core-hours.
+**This is calibrated on an M4 Max, not the server.** Scale it by the server's
+per-core speed. As a healthy-throughput reference on that machine: 8 workers,
+winning configuration, 120 scenarios of p=3/R=2/n=500 run in 27 s (~16,000
+scenarios/hour at that cost point). If a machine is far below that, stop and
+diagnose before committing to the long run — see below.
+
+`run_full_grid.sh` pins the BLAS thread count to 1 per worker. Without it the
+same 120 scenarios take 35 s (1.2x), because every worker process otherwise
+spawns one BLAS thread per core.
+
+If throughput is an order of magnitude below the reference, the cause is not
+thread pinning. Check, in this order:
+
+```bash
+sysctl hw.memsize hw.ncpu hw.perflevel0.logicalcpu   # RAM and performance cores
+vm_stat | grep -E "Pageouts|Swapins"                  # non-zero and growing = swapping
+```
+
+Each worker holds its own numpy/sklearn/lingam interpreter, so 8 workers on a
+machine with little RAM will swap and throughput collapses while the CPU still
+reads as busy. Use at most one worker per performance core, and fewer if memory
+is tight. To separate machine speed from parallelism, time one scenario alone:
+
+```bash
+python run_experiments.py --dataset_dir datasets --output_dir /tmp/one \
+    --detector v1H --no-hybrid --bootstrap_n 20 --bootstrap_threshold 0.60 \
+    --window_overlap 0.15 --chain_prior_threshold 0.05 --workers 1 --p_filter 3
+```
+
+A p=3 scenario costs ~1.3 s on the M4 Max. If a single worker is near that, the
+machine is fine and the problem is parallelism or memory.
+
+Cost is concentrated in `p ≥ 10` and `R ≥ 6`: `p=12` alone is 24 of the 109
+core-hours. The index is ordered by `p` ascending, so the run starts on its
+cheapest scenarios — early throughput is **not** representative of the whole
+grid and will drop sharply as `p` grows.
 
 To calibrate on the server before committing to the long run, time one arm on a
 single node count:
