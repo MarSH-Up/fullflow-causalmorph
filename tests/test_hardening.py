@@ -222,6 +222,73 @@ class StudentisedStatistic(unittest.TestCase):
         self.assertLess(abs(cps[0] - T // 2), W)
 
 
+class RefinedScale(unittest.TestCase):
+    """One-step refinement of the per-pair scale: re-estimate the MAD excluding
+    +-W around the change points of a first pass. With short regimes the
+    change-point bumps occupy a large share of the series and inflate the
+    single-pass MAD, which costs recall on the later, smaller changes."""
+
+    @staticmethod
+    def _short_regimes(seed=8, p=6, n_reg=6, L=600):
+        # p channels, independent except one pair whose correlation flips sign
+        # at every regime boundary: 5 changes of width 2W in 3600 samples.
+        rng = np.random.default_rng(seed)
+        T = n_reg * L
+        X = rng.laplace(size=(T, p))
+        for k in range(n_reg):
+            a, b = k * L, (k + 1) * L
+            rho = 0.7 if k % 2 == 0 else -0.7
+            X[a:b, 1] = rho * X[a:b, 0] + np.sqrt(1 - rho ** 2) * X[a:b, 1]
+        cps = [k * L for k in range(1, n_reg)]
+        return X, cps
+
+    def test_refined_scale_is_below_single_pass_on_the_changing_pair(self):
+        from detectors.detectors_correlation import standardized_corr_change
+        X, cps = self._short_regimes()
+        W = 120
+        _, s0 = standardized_corr_change(X, W, studentize=True, return_scale=True)
+        mask = np.zeros(len(X), bool)
+        for c in cps:
+            mask[max(0, c - W):c + W] = True
+        _, s1 = standardized_corr_change(X, W, studentize=True, scale_mask=mask, return_scale=True)
+        self.assertLess(s1[0], 0.8 * s0[0], f"pair (0,1): single-pass {s0[0]:.2f}, refined {s1[0]:.2f}")
+
+    def test_refined_null_scale_is_unit_inside_regimes(self):
+        from detectors.detectors_correlation import standardized_corr_change
+        X, cps = self._short_regimes()
+        W = 120
+        mask = np.zeros(len(X), bool)
+        for c in cps:
+            mask[max(0, c - W):c + W] = True
+        z0 = standardized_corr_change(X, W, studentize=True)
+        z1 = standardized_corr_change(X, W, studentize=True, scale_mask=mask)
+        inside = ~mask
+        inside[:W] = False; inside[-W:] = False
+        robust = lambda v: 1.4826 * np.median(np.abs(v - np.median(v)))
+        # the studentisation fixes the ROBUST scale to one; with Laplace noise
+        # and |rho| = 0.7 the tails are heavy, so the plain sd sits above it
+        # by construction and is only bounded, not pinned
+        r0, r1 = robust(z0[inside][:, 0]), robust(z1[inside][:, 0])
+        self.assertLess(r0, 0.85, f"premise: single-pass scale must be inflated here (robust {r0:.2f})")
+        self.assertTrue(0.85 < r1 < 1.15, f"refined within-regime robust scale {r1:.3f}")
+        self.assertLess(z1[inside][:, 0].std(), 1.3)
+
+    def test_refine_scale_recovers_changes_the_single_pass_misses(self):
+        from detectors.detectors_correlation import detect_correlation_changes
+        X, cps = self._short_regimes()
+        W = 120
+        single, _, _ = detect_correlation_changes(X, window=W, refractory_period=300,
+                                                  statistic="max", gamma=3.0, studentize=True)
+        refined, _, _ = detect_correlation_changes(X, window=W, refractory_period=300,
+                                                   statistic="max", gamma=3.0, studentize=True,
+                                                   refine_scale=True)
+        rec = lambda det: np.mean([any(abs(d - c) <= W for d in det) for c in cps])
+        self.assertGreaterEqual(rec(refined), rec(single))
+        self.assertGreaterEqual(rec(refined), 0.8, f"refined recall {rec(refined):.2f}, found {refined}")
+        fp = sum(all(abs(d - c) > W for c in cps) for d in refined)
+        self.assertLessEqual(fp, 1, f"refined false positives {fp}: {refined}")
+
+
 # ── 2.6 generator schedule ───────────────────────────────────────────────────
 
 class ChangeSchedule(unittest.TestCase):

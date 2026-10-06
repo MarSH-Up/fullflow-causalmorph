@@ -146,7 +146,7 @@ def main():
     det_names = ["D_v1H", "D_v1H_adaptive", "D_v1H_fixedW500", "D_v1J"]
     lad_names = ["L2_cold", "C3_no_seg", "L3_cold", "C1_oracle_anchor", "C2_oracle_seg", "L4_soft_chain"]
     sweep = sorted(n for n in os.listdir(args.val)
-                   if n.startswith(("D_v1J_g", "D_v1K_g")) and os.path.exists(os.path.join(args.val, n, "results.csv")))
+                   if n.startswith(("D_v1J_g", "D_v1K_g", "D_v1L_g")) and os.path.exists(os.path.join(args.val, n, "results.csv")))
     names = det_names + [n for n in sweep if n not in det_names] + lad_names
     rows = {n: load(os.path.join(args.val, n, "results.csv")) for n in names if n.startswith("D_")}
     # ladder rows are keyed by their base name so the rest of the script is suffix-agnostic

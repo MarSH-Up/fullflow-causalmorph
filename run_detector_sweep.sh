@@ -17,7 +17,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; cd "$HERE"
 
 PYTHON="${PYTHON:-python}"
 WORKERS="${WORKERS:-12}"
-DETECTOR="${DETECTOR:-v1J}"            # v1J (Fisher scale) or v1K (studentised)
+DETECTOR="${DETECTOR:-v1J}"            # v1J (Fisher) | v1K (studentised) | v1L (refined scale)
 GAMMAS="${GAMMAS:-2.5 3.0 3.5 4.0}"
 FIXEDW_GAMMA="${FIXEDW_GAMMA:-}"      # set to run v1J + fixed W at that gamma
 OUT="results/hardening_validation"

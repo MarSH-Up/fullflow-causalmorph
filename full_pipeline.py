@@ -449,6 +449,10 @@ def detect_change_points(
               (1.4826 * MAD over the series). On the grid the Fisher scale is
               1.2-1.7x too small and grows with p, so v1J's false-alarm rate
               at p=12 cannot be fixed by any global gamma; v1K's can.
+      "v1L" — v1K with the scale re-estimated after a first pass, excluding
+              +-W around its change points. With short regimes the bumps are
+              up to a third of the series and inflate v1K's MAD, which cost it
+              recall on later changes (0.97 at position 0, ~0.75 after).
       "v1I" — ensemble: v1G + wavelet-coherence-based detector.
               Generalises v1H by replacing Pearson correlation with squared
               wavelet coherence (Grinsted et al., 2004) — frequency-resolved
@@ -473,7 +477,7 @@ def detect_change_points(
     step_win = max(100, min_regime_len // 5)   # 500→100, 2500→500, 5000→1000
     ch_win   = max(160, min_regime_len // 5)   # 500→160, 2500→500, 5000→1000
 
-    if detector_version in ("v1G", "v1H", "v1I", "v1J", "v1K"):  # all use v1G as their wavelet base
+    if detector_version in ("v1G", "v1H", "v1I", "v1J", "v1K", "v1L"):  # all use v1G as their wavelet base
         result = detect_nonstationarity_v1G(
             X,
             baseline_idx,
@@ -513,7 +517,7 @@ def detect_change_points(
             seed=seed,
         )
 
-    if detector_version in ("v1H", "v1J", "v1K"):
+    if detector_version in ("v1H", "v1J", "v1K", "v1L"):
         # v1H detector: correlation-based change-point detection.
         # Tracks INTER-channel correlation shifts via Frobenius distance —
         # the signal that actually changes when the causal graph rewires.
@@ -536,10 +540,11 @@ def detect_change_points(
             baseline_idx=baseline_idx,
             threshold_mad_k=6.0,      # stricter peak threshold (default 4.0)
             min_threshold=0.5,        # higher floor (default 0.3)
-            statistic="max" if detector_version in ("v1J", "v1K") else "frobenius",
+            statistic="max" if detector_version in ("v1J", "v1K", "v1L") else "frobenius",
             gamma=corr_gamma,
             adaptive_null=adaptive_null,
-            studentize=(detector_version == "v1K"),
+            studentize=detector_version in ("v1K", "v1L"),
+            refine_scale=(detector_version == "v1L"),
         )
 
         # Use correlation CPs as the detector output. Fall back to v1G only

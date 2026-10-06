@@ -15,7 +15,13 @@ import numpy as np
 from scipy.signal import find_peaks
 
 
-def standardized_corr_change(X: np.ndarray, window: int, studentize: bool = False) -> np.ndarray:
+def standardized_corr_change(
+    X: np.ndarray,
+    window: int,
+    studentize: bool = False,
+    scale_mask: np.ndarray = None,
+    return_scale: bool = False,
+):
     """
     Per-pair change in correlation between the windows before and after t,
     standardised on the Fisher scale:
@@ -34,7 +40,14 @@ def standardized_corr_change(X: np.ndarray, window: int, studentize: bool = Fals
         1.30 / 1.66 at p = 3 / 6 / 9 / 12; 0.87 / 0.87 / 0.83 / 0.91 after
         studentising). With sparse changes the MAD is dominated by the null, so
         no baseline segment is needed; the change-point bumps make s_ij a
-        little conservative, in the safe direction.
+        little conservative, in the safe direction — or more than a little
+        when regimes are short (see scale_mask).
+    scale_mask : boolean [T]; rows marked True are excluded from the scale
+        estimate (not from the output). Used for the one-step refinement:
+        mask +-W around the change points of a first pass, so the bumps no
+        longer inflate the MAD. If fewer than `window` rows survive the mask,
+        the unmasked estimate is kept.
+    return_scale : also return s_ij, shape [m] (ones when not studentising).
     """
     T, N = X.shape
     triu = np.triu_indices(N, k=1)
@@ -48,13 +61,19 @@ def standardized_corr_change(X: np.ndarray, window: int, studentize: bool = Fals
         c_fut = np.nan_to_num(np.corrcoef(X[t:t + window].T), nan=0.0)[triu]
         out[t] = scale * (np.arctanh(np.clip(c_fut, -clip, clip))
                           - np.arctanh(np.clip(c_past, -clip, clip)))
+    s_hat = np.ones(out.shape[1])
     if studentize:
         ok = np.isfinite(out).all(axis=1)
-        if ok.any():
-            med = np.median(out[ok], axis=0)
-            s_hat = 1.4826 * np.median(np.abs(out[ok] - med), axis=0)
-            out[ok] = out[ok] / np.maximum(s_hat, 1e-6)
-    return out
+        use = ok.copy()
+        if scale_mask is not None:
+            use &= ~np.asarray(scale_mask, dtype=bool)
+            if use.sum() < window:
+                use = ok
+        if use.any():
+            med = np.median(out[use], axis=0)
+            s_hat = np.maximum(1.4826 * np.median(np.abs(out[use] - med), axis=0), 1e-6)
+            out[ok] = out[ok] / s_hat
+    return (out, s_hat) if return_scale else out
 
 
 def detect_correlation_changes(
@@ -69,6 +88,7 @@ def detect_correlation_changes(
     gamma: float = 2.0,
     adaptive_null: bool = False,
     studentize: bool = False,
+    refine_scale: bool = False,
 ):
     """
     Detect change points from shifts in pairwise channel correlations.
@@ -91,6 +111,11 @@ def detect_correlation_changes(
     gamma : additive margin for the "max" threshold (ignored otherwise)
     studentize : for "max", divide each pair by its robust null scale first
                  (see standardized_corr_change); ignored for "frobenius"
+    refine_scale : with studentize, run a first pass, mask +-window around its
+                   change points, re-estimate every pair's scale on the rest
+                   and detect again. Removes the bias the bumps put into the
+                   single-pass MAD, which is what costs the later, smaller
+                   changes when regimes are short.
     adaptive_null : re-estimate the frobenius threshold from the segment since
                     the last accepted change point (with a guard band of one
                     window on each side) instead of from regime 0 only.
@@ -108,11 +133,20 @@ def detect_correlation_changes(
 
     if statistic == "max":
         m = N * (N - 1) // 2
-        zeta = standardized_corr_change(X, window, studentize=studentize)
-        change_signal = np.nan_to_num(np.nanmax(np.abs(zeta), axis=1), nan=0.0)
         threshold = float(np.sqrt(2.0 * np.log(m)) + gamma)
-        peaks, _ = find_peaks(change_signal, height=threshold, distance=refractory_period)
-        peaks = [int(p) for p in peaks if edge_margin <= p < T - edge_margin]
+
+        def _detect(mask):
+            zeta = standardized_corr_change(X, window, studentize=studentize, scale_mask=mask)
+            sig = np.nan_to_num(np.nanmax(np.abs(zeta), axis=1), nan=0.0)
+            pk, _ = find_peaks(sig, height=threshold, distance=refractory_period)
+            return [int(p) for p in pk if edge_margin <= p < T - edge_margin], sig
+
+        peaks, change_signal = _detect(None)
+        if refine_scale and studentize and peaks:
+            mask = np.zeros(T, dtype=bool)
+            for c in peaks:
+                mask[max(0, c - window):min(T, c + window)] = True
+            peaks, change_signal = _detect(mask)
         return peaks, change_signal, threshold
     if statistic != "frobenius":
         raise ValueError(f"statistic must be 'frobenius' or 'max', got {statistic!r}")
