@@ -15,7 +15,7 @@ import numpy as np
 from scipy.signal import find_peaks
 
 
-def standardized_corr_change(X: np.ndarray, window: int) -> np.ndarray:
+def standardized_corr_change(X: np.ndarray, window: int, studentize: bool = False) -> np.ndarray:
     """
     Per-pair change in correlation between the windows before and after t,
     standardised on the Fisher scale:
@@ -25,6 +25,16 @@ def standardized_corr_change(X: np.ndarray, window: int) -> np.ndarray:
     Under no change and approximate normality, Var(artanh r) ~ 1/(W-3), the two
     windows are independent, so zeta_ij ~ N(0, 1). Returns an array [T, m] over
     the m = N(N-1)/2 upper-triangular pairs; rows outside [W, T-W) are NaN.
+
+    studentize : divide each pair by its own robust scale over the whole
+        series, s_ij = 1.4826 * MAD_t zeta_ij(t). The Fisher variance is the
+        Gaussian, i.i.d. result; with heavy-tailed innovations, strong
+        correlations or temporally autocorrelated noise the true null scale is
+        larger and grows with p (measured on the grid: pooled sd 1.22 / 1.20 /
+        1.30 / 1.66 at p = 3 / 6 / 9 / 12; 0.87 / 0.87 / 0.83 / 0.91 after
+        studentising). With sparse changes the MAD is dominated by the null, so
+        no baseline segment is needed; the change-point bumps make s_ij a
+        little conservative, in the safe direction.
     """
     T, N = X.shape
     triu = np.triu_indices(N, k=1)
@@ -38,6 +48,12 @@ def standardized_corr_change(X: np.ndarray, window: int) -> np.ndarray:
         c_fut = np.nan_to_num(np.corrcoef(X[t:t + window].T), nan=0.0)[triu]
         out[t] = scale * (np.arctanh(np.clip(c_fut, -clip, clip))
                           - np.arctanh(np.clip(c_past, -clip, clip)))
+    if studentize:
+        ok = np.isfinite(out).all(axis=1)
+        if ok.any():
+            med = np.median(out[ok], axis=0)
+            s_hat = 1.4826 * np.median(np.abs(out[ok] - med), axis=0)
+            out[ok] = out[ok] / np.maximum(s_hat, 1e-6)
     return out
 
 
@@ -52,6 +68,7 @@ def detect_correlation_changes(
     statistic: str = "frobenius",
     gamma: float = 2.0,
     adaptive_null: bool = False,
+    studentize: bool = False,
 ):
     """
     Detect change points from shifts in pairwise channel correlations.
@@ -72,6 +89,8 @@ def detect_correlation_changes(
                 change; threshold is analytic, sqrt(2 ln m) + gamma, so it is
                 calibration-free in both the number of pairs and the window.
     gamma : additive margin for the "max" threshold (ignored otherwise)
+    studentize : for "max", divide each pair by its robust null scale first
+                 (see standardized_corr_change); ignored for "frobenius"
     adaptive_null : re-estimate the frobenius threshold from the segment since
                     the last accepted change point (with a guard band of one
                     window on each side) instead of from regime 0 only.
@@ -89,7 +108,7 @@ def detect_correlation_changes(
 
     if statistic == "max":
         m = N * (N - 1) // 2
-        zeta = standardized_corr_change(X, window)
+        zeta = standardized_corr_change(X, window, studentize=studentize)
         change_signal = np.nan_to_num(np.nanmax(np.abs(zeta), axis=1), nan=0.0)
         threshold = float(np.sqrt(2.0 * np.log(m)) + gamma)
         peaks, _ = find_peaks(change_signal, height=threshold, distance=refractory_period)

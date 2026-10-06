@@ -175,6 +175,53 @@ class StandardisedCorrelationChange(unittest.TestCase):
         self.assertLessEqual(len(adapt), 1)
 
 
+class StudentisedStatistic(unittest.TestCase):
+    """Per-pair robust studentisation: zeta / (1.4826 * MAD_t zeta) restores unit
+    null scale when the Fisher approximation does not (heavy tails, strong
+    correlation, temporal autocorrelation)."""
+
+    @staticmethod
+    def _hard_null(T=12000, p=6, seed=5):
+        # Laplace SEM with strong edges whose innovations are temporally
+        # autocorrelated (AR(1), phi=0.85 — the grid's pink observation noise
+        # has the same effect): no change point anywhere, but each window holds
+        # far fewer effective samples than W, so Var(artanh r) >> 1/(W-3).
+        rng = np.random.default_rng(seed)
+        phi = 0.85
+        E = rng.laplace(size=(T, p))
+        for t in range(1, T):
+            E[t] = phi * E[t - 1] + np.sqrt(1 - phi ** 2) * E[t]
+        X = np.zeros((T, p))
+        X[:, 0] = E[:, 0]
+        for j in range(1, p):
+            X[:, j] = 0.9 * X[:, j - 1] + E[:, j]
+        return X
+
+    def test_plain_fisher_scale_is_inflated_on_hard_null(self):
+        from detectors.detectors_correlation import standardized_corr_change
+        z = standardized_corr_change(self._hard_null(), window=200)
+        z = z[np.isfinite(z).all(axis=1)]
+        self.assertGreater(z.std(), 1.3, "premise: the Fisher scale must be badly off here")
+
+    def test_studentised_scale_is_unit_on_hard_null(self):
+        from detectors.detectors_correlation import standardized_corr_change
+        z = standardized_corr_change(self._hard_null(), window=200, studentize=True)
+        z = z[np.isfinite(z).all(axis=1)]
+        self.assertTrue(0.8 < z.std() < 1.15, f"studentised pooled sd {z.std():.3f}")
+
+    def test_studentised_max_keeps_analytic_threshold_and_finds_change(self):
+        from detectors.detectors_correlation import detect_correlation_changes
+        rng = np.random.default_rng(2)
+        T, p, W = 4000, 8, 150
+        X = rng.standard_normal((T, p))
+        X[T // 2:, 1] = 0.9 * X[T // 2:, 0] + 0.3 * rng.standard_normal(T - T // 2)
+        cps, _, thr = detect_correlation_changes(X, window=W, refractory_period=300,
+                                                 statistic="max", gamma=3.0, studentize=True)
+        self.assertAlmostEqual(thr, np.sqrt(2 * np.log(28)) + 3.0, places=9)
+        self.assertEqual(len(cps), 1, f"expected one change point, got {cps}")
+        self.assertLess(abs(cps[0] - T // 2), W)
+
+
 # ── 2.6 generator schedule ───────────────────────────────────────────────────
 
 class ChangeSchedule(unittest.TestCase):

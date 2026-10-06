@@ -144,7 +144,7 @@ def main():
     names = ["D_v1H", "D_v1H_adaptive", "D_v1H_fixedW500", "D_v1J",
              "L2_cold", "C3_no_seg", "L3_cold", "C1_oracle_anchor", "C2_oracle_seg", "L4_soft_chain"]
     sweep = sorted(n for n in os.listdir(args.val)
-                   if n.startswith("D_v1J_g") and os.path.exists(os.path.join(args.val, n, "results.csv")))
+                   if n.startswith(("D_v1J_g", "D_v1K_g")) and os.path.exists(os.path.join(args.val, n, "results.csv")))
     names += [n for n in sweep if n not in names]
     rows = {n: load(os.path.join(args.val, n, "results.csv")) for n in names}
     done = [n for n, d in rows.items() if d is not None and len(d)]
