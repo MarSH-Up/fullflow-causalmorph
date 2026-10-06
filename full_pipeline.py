@@ -65,6 +65,8 @@ class RegimeStructure:
     true_regime_idx: int = -1
     true_adjacency_matrix: Optional[pd.DataFrame] = None
     shd_metrics: Dict[str, Any] = field(default_factory=dict)
+    edge_probs: Optional[np.ndarray] = None        # per-edge bootstrap frequency, [p, p]
+    prior_edge_probs: Optional[np.ndarray] = None  # soft chain prior this window received
 
 
 # ── SHD helpers ──────────────────────────────────────────────────────────────
@@ -120,20 +122,32 @@ def aggregate_structures_bayesian(
     threshold: float = 0.05,
     alpha_prior: float = 1.0,
     beta_prior: float = 1.0,
-    edge_threshold: float = 0.20,
+    edge_threshold: float = 0.5,
+    prior_density: Optional[float] = None,
+    prior_strength: float = 1.0,
 ) -> tuple:
     """
     Collapse all learned regime structures into one consensus graph via
     Beta-Bernoulli Bayesian aggregation.
 
     Model (per edge e_ij):
-      - Prior     : Beta(alpha_prior, beta_prior)  — uniform by default
+      - Prior     : Beta(alpha_prior, beta_prior)  — uniform by default, or
+                    Beta(kappa*rho0, kappa*(1-rho0)) when prior_density=rho0
+                    and prior_strength=kappa are given (sparsity-encoding)
       - Votes     : each regime casts a binary vote (edge present/absent),
                     weighted by its fraction of total samples
       - Likelihood: effective count k_eff = n * Σ w_r * x_r,  n_eff = n regimes
       - Posterior  : Beta(alpha + k_eff,  beta + n_eff - k_eff)
       - Post. mean : (alpha + k_eff) / (alpha + beta + n_eff)
-      - Include    : if posterior mean > edge_threshold (default 0.20)
+      - Include    : if posterior mean > edge_threshold (default 0.5)
+
+    Why 0.5: under 0-1 loss the Bayes decision includes an edge iff its
+    posterior probability exceeds 1/2. With Beta(1,1) that is exactly a
+    length-weighted majority vote for every n. The previous default of 0.20
+    admitted every edge whenever n <= 2, because an edge with no votes has
+    posterior mean 1/(n+2) = 0.333 (n=1) or 0.25 (n=2); half of the 18,000
+    full-grid scenarios have n <= 2 windows and their consensus graph was the
+    complete graph (consensus recall exactly 1.000 on all of them).
 
     Returns
     -------
@@ -145,6 +159,9 @@ def aggregate_structures_bayesian(
     if n == 0:
         empty = pd.DataFrame(np.zeros((p, p)), index=variable_names, columns=variable_names)
         return empty, empty
+    if prior_density is not None:
+        alpha_prior = prior_strength * prior_density
+        beta_prior = prior_strength * (1.0 - prior_density)
 
     # Regime weights ∝ window length
     lengths = np.array([s.n_samples for s in structures], dtype=float)
@@ -209,6 +226,50 @@ def _pink_noise_unit(n: int, rng: np.random.Generator) -> np.ndarray:
 
 
 # ── Step 1: Signal generation ─────────────────────────────────────────────────
+def schedule_changes(
+    edges_to_lose, edges_to_gain, n_regimes: int, version: str = "v1", seed: int = 0,
+):
+    """
+    Assign every edge change to the regime transition at which it fires, so
+    that consecutive regimes always differ. Returns (lose_at, gain_at), each
+    mapping edge -> regime index from which the edge is absent (lost) or
+    present (gained).
+
+    "v1" (the grid of 2026-05/10): each list is binned separately by
+        1 + floor(k * n_trans / n). Floor-binning puts the larger bins first
+        and both lists fire their first element at regime 1, so the first
+        transition carries ~2x the changes of later ones (measured 4.7 vs
+        3.3-4.1 edges at p=10) and is correspondingly easier to detect.
+    "v2": the two lists are pooled and shuffled, split into n_trans bins whose
+        sizes differ by at most one, with the oversized bins chosen at random
+        (seeded) rather than always first. Every transition then carries
+        ~(n_L + n_G) / n_trans changes in expectation.
+    """
+    n_trans = max(n_regimes - 1, 1)
+    if version == "v1":
+        def _bin(edges):
+            n = len(edges)
+            return {e: 1 + int(k * n_trans / n) for k, e in enumerate(edges)} if n else {}
+        return _bin(edges_to_lose), _bin(edges_to_gain)
+    if version != "v2":
+        raise ValueError(f"schedule version must be 'v1' or 'v2', got {version!r}")
+
+    rng = np.random.default_rng(seed)
+    items = [("L", e) for e in edges_to_lose] + [("G", e) for e in edges_to_gain]
+    rng.shuffle(items)
+    n_items = len(items)
+    base, extra = divmod(n_items, n_trans)
+    bonus = set(rng.choice(n_trans, size=extra, replace=False).tolist()) if extra else set()
+    lose_at, gain_at = {}, {}
+    pos = 0
+    for j in range(n_trans):
+        for _ in range(base + (1 if j in bonus else 0)):
+            kind, e = items[pos]
+            (lose_at if kind == "L" else gain_at)[e] = 1 + j
+            pos += 1
+    return lose_at, gain_at
+
+
 def build_nonstationary_scenario(
     p: int,
     n_regimes: int,
@@ -219,6 +280,7 @@ def build_nonstationary_scenario(
     seed: int,
     noise_fraction: float = 0.08,
     regime_sizes: list = None,
+    schedule_version: str = "v1",
 ):
     """
     Build a multi-regime non-stationary causal time series.
@@ -279,21 +341,9 @@ def build_nonstationary_scenario(
     edges_to_lose = sorted(initial_edges - target_edges)   # removed over time
     edges_to_gain = sorted(target_edges  - initial_edges)  # added   over time
 
-    # Assign each edge change to a specific regime transition so that
-    # every consecutive pair of regimes always differs by at least one edge.
-    # Schedule: change k fires at regime  1 + int(k * (n_regimes-1) / n_changes).
-    # This spreads changes as evenly as possible, with the first always at regime 1.
-    n_trans = max(n_regimes - 1, 1)
-
-    def _schedule(edges):
-        """edge -> regime index at which it becomes active (gained) or inactive (lost)."""
-        n = len(edges)
-        if n == 0:
-            return {}
-        return {e: 1 + int(k * n_trans / n) for k, e in enumerate(edges)}
-
-    lose_at = _schedule(edges_to_lose)   # edge removed starting at this regime
-    gain_at = _schedule(edges_to_gain)   # edge added   starting at this regime
+    lose_at, gain_at = schedule_changes(
+        edges_to_lose, edges_to_gain, n_regimes, version=schedule_version, seed=seed,
+    )
 
     dags = []
     for i in range(n_regimes):
@@ -378,6 +428,8 @@ def detect_change_points(
     min_regime_len: int,
     seed: int = 0,
     detector_version: str = "v1G",
+    corr_gamma: float = 2.0,
+    adaptive_null: bool = False,
 ) -> DetectionResult:
     """
     Run the wavelet-based multi-moment detector.
@@ -390,6 +442,9 @@ def detect_change_points(
               CPs that wavelet energy moments miss); v1G is fallback when
               correlation finds no CPs at all. On p=5 benchmark: F1 0.65 →
               0.78 (+20%), recall 0.64 → 0.97.
+      "v1J" — v1H with the Fisher-standardised max-pair statistic and the
+              analytic threshold sqrt(2 ln m) + corr_gamma (no baseline
+              calibration; see detectors_correlation.standardized_corr_change).
       "v1I" — ensemble: v1G + wavelet-coherence-based detector.
               Generalises v1H by replacing Pearson correlation with squared
               wavelet coherence (Grinsted et al., 2004) — frequency-resolved
@@ -414,7 +469,7 @@ def detect_change_points(
     step_win = max(100, min_regime_len // 5)   # 500→100, 2500→500, 5000→1000
     ch_win   = max(160, min_regime_len // 5)   # 500→160, 2500→500, 5000→1000
 
-    if detector_version in ("v1G", "v1H", "v1I"):  # v1H/v1I use v1G as their wavelet base
+    if detector_version in ("v1G", "v1H", "v1I", "v1J"):  # v1H/v1I/v1J use v1G as their wavelet base
         result = detect_nonstationarity_v1G(
             X,
             baseline_idx,
@@ -454,7 +509,7 @@ def detect_change_points(
             seed=seed,
         )
 
-    if detector_version == "v1H":
+    if detector_version in ("v1H", "v1J"):
         # v1H detector: correlation-based change-point detection.
         # Tracks INTER-channel correlation shifts via Frobenius distance —
         # the signal that actually changes when the causal graph rewires.
@@ -477,6 +532,9 @@ def detect_change_points(
             baseline_idx=baseline_idx,
             threshold_mad_k=6.0,      # stricter peak threshold (default 4.0)
             min_threshold=0.5,        # higher floor (default 0.3)
+            statistic="max" if detector_version == "v1J" else "frobenius",
+            gamma=corr_gamma,
+            adaptive_null=adaptive_null,
         )
 
         # Use correlation CPs as the detector output. Fall back to v1G only
@@ -639,6 +697,8 @@ def extract_causal_structures(
     bootstrap_n: int = 0,
     bootstrap_threshold: float = 0.60,
     chain_prior_edge_threshold: float = 0.10,
+    chain_soft_lambda: Optional[float] = None,
+    prior_density: float = 0.2,
 ) -> List[RegimeStructure]:
     """
     Iteratively extract causal structures from every detected regime window.
@@ -673,6 +733,16 @@ def extract_causal_structures(
       before passing it as a chain prior to the next regime (default 0.10,
       previously 0.05).  Slightly higher to reduce error cascade.
 
+    chain_soft_lambda : Optional[float]
+      If set, the chain prior is a first-order Markov prior on edge marginals
+      rather than the binarised previous adjacency:
+          q_prior = lambda * q_prev + (1 - lambda) * prior_density
+      where q_prev is the previous window's bootstrap edge frequency (or its
+      binary adjacency when bootstrap_n == 0). CausalMorph receives
+      1[q_prior > 0.5]; the bootstrap threshold is then applied to the
+      posterior (q_prior + q_hat) / 2 instead of to q_hat alone, so a weak
+      prior can be overridden by data and a strong one persists.
+
     window_overlap : fraction of the previous window to prepend to each window.
     """
     if prior_mode not in ("anchor", "chain"):
@@ -692,6 +762,7 @@ def extract_causal_structures(
     structures: List[RegimeStructure] = []
     prev_causal_order: Optional[List[int]] = None
     prev_adj_matrix: Optional[pd.DataFrame] = None
+    prev_edge_probs: Optional[np.ndarray] = None
     # In anchor mode the prior used for window 0 is reused for every window.
     anchor_order: Optional[List[int]] = initial_order
     anchor_adj: Optional[pd.DataFrame] = initial_adj
@@ -745,23 +816,39 @@ def extract_causal_structures(
             adj_prior = prev_adj_matrix
             used_prior = True
             prior_source = "chain"
+            if chain_soft_lambda is not None and prev_edge_probs is not None:
+                q_prior = chain_soft_lambda * prev_edge_probs + (1.0 - chain_soft_lambda) * prior_density
+                np.fill_diagonal(q_prior, 0.0)
+                adj_prior = pd.DataFrame((q_prior > 0.5).astype(float),
+                                         columns=variable_names, index=variable_names)
+                prior_source = "chain-soft"
             if verbose:
                 order_names = [variable_names[i] for i in prev_causal_order]
                 print(f"    Using chained prior from regime {regime_idx - 1}:  order={' -> '.join(order_names)}")
 
         X_raw = window_df.values
+        q_prior = None
+        if prior_source == "chain-soft":
+            q_prior = chain_soft_lambda * prev_edge_probs + (1.0 - chain_soft_lambda) * prior_density
+            np.fill_diagonal(q_prior, 0.0)
 
         # ── Warm path (CausalMorph + DirectLiNGAM) ──────────────────────────
+        edge_probs_warm = None
         if bootstrap_n > 0:
             if verbose:
                 print(f"    Warm path: bootstrap (N={bootstrap_n}, edge_thr={bootstrap_threshold})...")
-            warm_order, adj_warm, _ = _bootstrap_fit(
+            warm_order, adj_warm, edge_probs_warm = _bootstrap_fit(
                 window_df, variable_names,
                 use_cm=True,
                 prior_order=causal_order_prior, prior_adj=adj_prior,
                 n_boot=bootstrap_n, threshold=bootstrap_threshold,
                 seed_base=regime_idx * 100003,
             )
+            if q_prior is not None:
+                # threshold the posterior, not the likelihood alone
+                post = 0.5 * (q_prior + edge_probs_warm)
+                adj_warm = pd.DataFrame((post >= bootstrap_threshold).astype(float),
+                                        columns=variable_names, index=variable_names)
         else:
             if verbose:
                 print("    Applying CausalMorph...")
@@ -842,8 +929,12 @@ def extract_causal_structures(
             chosen=chosen_fit,
             score_warm=s_warm,
             score_cold=s_cold,
+            edge_probs=(edge_probs_warm if edge_probs_warm is not None
+                        else (np.abs(adj_final.values) > chain_prior_edge_threshold).astype(float)),
+            prior_edge_probs=q_prior,
         )
         structures.append(struct)
+        prev_edge_probs = struct.edge_probs
 
         prev_causal_order = final_order
         # Binarize before using as CausalMorph prior — CausalMorph uses != 0
@@ -869,7 +960,7 @@ def extract_causal_structures(
 
 
 # ── Multi-algorithm ablation ─────────────────────────────────────────────────
-ABLATION_METHODS = ("causalmorph", "directlingam", "icalingam")
+ABLATION_METHODS = ("directlingam", "icalingam")
 
 
 def extract_causal_structures_ablation(
@@ -881,16 +972,24 @@ def extract_causal_structures_ablation(
     window_overlap: float = 0.25,
     verbose: bool = True,
     prior_mode: str = "chain",
+    seed: int = 0,
 ) -> Dict[str, List[RegimeStructure]]:
     """
-    Run three causal discovery methods on each detected window and return
+    Run the baseline structure learners on each detected window and return
     separate structure lists for side-by-side comparison.
 
     Methods
     -------
-    causalmorph   : CausalMorph transform → DirectLiNGAM  (existing pipeline)
-    directlingam  : DirectLiNGAM on raw window data        (no transform)
-    icalingam     : ICA-LiNGAM on raw window data          (alternative algo)
+    directlingam  : DirectLiNGAM on raw window data   (no transform, no prior)
+    icalingam     : ICA-LiNGAM on raw window data     (no transform, no prior)
+
+    The "causalmorph" arm that used to live here was the pipeline with
+    bootstrap_n=0 — the baseline arm of the extraction ablation computed a
+    second time — and was removed on 2026-10-06. Compare against the baseline
+    arm's results.csv instead.
+
+    initial_adj / initial_order / prior_mode are accepted for signature
+    compatibility and unused: neither method takes a prior.
 
     Returns dict  {method_name: List[RegimeStructure]}
     """
@@ -908,12 +1007,6 @@ def extract_causal_structures_ablation(
 
     results: Dict[str, List[RegimeStructure]] = {m: [] for m in ABLATION_METHODS}
 
-    # CausalMorph chain state
-    prev_causal_order: Optional[List[int]] = None
-    prev_adj_matrix: Optional[pd.DataFrame] = None
-    anchor_order: Optional[List[int]] = initial_order
-    anchor_adj: Optional[pd.DataFrame] = initial_adj
-
     for regime_idx, (start, end) in enumerate(windows):
         n_samples = end - start
         if verbose:
@@ -921,95 +1014,27 @@ def extract_causal_structures_ablation(
 
         window_df = pd.DataFrame(X[start:end], columns=variable_names)
 
-        # ── 1. CausalMorph + DirectLiNGAM (existing logic) ──────────────
-        prior_source = "cold"
-        if prev_causal_order is None:
-            if initial_adj is not None and initial_order is not None:
-                causal_order_prior = initial_order
-                adj_prior = initial_adj
-                prior_source = "anchor"
-            else:
-                model_cold = DirectLiNGAM()
-                model_cold.fit(window_df)
-                causal_order_prior = model_cold.causal_order_
-                adj_cold = model_cold.adjacency_matrix_
-                adj_prior = pd.DataFrame(
-                    (np.abs(adj_cold) > 0.05).astype(float),
-                    columns=variable_names, index=variable_names,
-                )
-                anchor_order = causal_order_prior
-                anchor_adj = adj_prior
-            used_prior = False
-        elif prior_mode == "anchor":
-            causal_order_prior = anchor_order
-            adj_prior = anchor_adj
-            used_prior = True
-            prior_source = "anchor"
-        else:
-            causal_order_prior = prev_causal_order
-            adj_prior = prev_adj_matrix
-            used_prior = True
-            prior_source = "chain"
-
-        try:
-            transformed = causalMorph(
-                window_df,
-                causal_order=causal_order_prior,
-                adjacency_matrix=adj_prior,
-                verbose=False,
-            )
-        except Exception:
-            transformed = window_df
-
-        model_cm = DirectLiNGAM()
-        model_cm.fit(transformed)
-        adj_cm = pd.DataFrame(model_cm.adjacency_matrix_, columns=variable_names, index=variable_names)
-
-        results["causalmorph"].append(RegimeStructure(
-            regime_idx=regime_idx, window_start=start, window_end=end,
-            n_samples=n_samples, causal_order=model_cm.causal_order_,
-            adjacency_matrix=adj_cm, used_prior=used_prior, prior_source=prior_source,
-        ))
-
-        prev_causal_order = model_cm.causal_order_
-        prev_adj_matrix = pd.DataFrame(
-            (np.abs(adj_cm.values) > 0.05).astype(float),
-            columns=variable_names, index=variable_names,
-        )
-
-        # ── 2. DirectLiNGAM only (no CausalMorph) ──────────────────────
         model_dl = DirectLiNGAM()
         model_dl.fit(window_df)
         adj_dl = pd.DataFrame(model_dl.adjacency_matrix_, columns=variable_names, index=variable_names)
-
         results["directlingam"].append(RegimeStructure(
             regime_idx=regime_idx, window_start=start, window_end=end,
             n_samples=n_samples, causal_order=model_dl.causal_order_,
             adjacency_matrix=adj_dl, used_prior=False, prior_source="cold",
         ))
 
-        # ── 3. ICA-LiNGAM (no CausalMorph) ─────────────────────────────
-        model_ica = ICALiNGAM(max_iter=3000)
+        # ICA-LiNGAM's FastICA initialisation is random; seed it so a scenario
+        # produces the same row on every run.
+        model_ica = ICALiNGAM(max_iter=3000, random_state=seed + regime_idx)
         model_ica.fit(window_df)
         adj_ica = pd.DataFrame(model_ica.adjacency_matrix_, columns=variable_names, index=variable_names)
-
         results["icalingam"].append(RegimeStructure(
             regime_idx=regime_idx, window_start=start, window_end=end,
             n_samples=n_samples, causal_order=model_ica.causal_order_,
             adjacency_matrix=adj_ica, used_prior=False, prior_source="cold",
         ))
 
-        if verbose:
-            for method in ABLATION_METHODS:
-                s = results[method][-1]
-                n_edges = int((np.abs(s.adjacency_matrix.values) > 0.05).sum())
-                order_names = [variable_names[i] for i in s.causal_order]
-                print(f"    {method:<14}  edges={n_edges:>2}  order={' -> '.join(order_names)}")
-
     return results
-
-
-# ── Plots ─────────────────────────────────────────────────────────────────────
 
 
 def plot_detection_diagnostics(
