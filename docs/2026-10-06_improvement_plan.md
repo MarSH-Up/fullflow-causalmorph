@@ -474,3 +474,89 @@ an argument; 5 makes it a paper.
 
 CD-NOD runtime at $p=12$ (unknown until tried); the real-data track (SO6); the
 nSHD-vs-$|E|$ normalisation decision, which is editorial once both are shown.
+
+---
+
+## 7. Validation log — detection track (2026-10-06, 600-scenario stratified sample)
+
+Sample: 60 scenarios per $p$, 20 per samples-per-regime within each $p$, seed
+20261006 (`results/hardening_validation/sample_ids.txt`). "Before" is the
+October-5 full-grid run restricted to the same scenarios. Micro-averaged,
+tolerance 200 unless stated. Branch `feature/pipeline-hardening`.
+
+### 7.1 What §2.2 predicted, and what happened
+
+| row | P | R | $F_1$ | R@25 | under-seg | over-seg |
+|---|---|---|---|---|---|---|
+| before (v1H, old post-processing) | 0.735 | 0.481 | 0.581 | 0.395 | 53.5% | 11.7% |
+| v1H, merge instead of delete (§2.2) | 0.588 | 0.685 | 0.633 | 0.569 | 38.3% | 23.0% |
+
+Predicted R 0.65–0.75, P 0.65–0.70, under-seg ≈ 35%: recall and
+under-segmentation as predicted, precision 6 pp below the band — the
+deleted rule was also removing false positives, and the loss concentrates at
+$n = 1500$ (P 0.525). Zero-detection scenarios 12.2% → 0.0%: that figure was
+the pruning, not the detector.
+
+### 7.2 Two predictions of §2.3 that were wrong
+
+**Adaptive null does not flatten the positional decay.** v1H + adaptive null:
+P 0.797, R 0.565, position profile 0.86 → 0.18 (unchanged in shape). What
+decays at later transitions is the *signal* (§2.6), and re-estimating the null
+cannot recover signal. It is a precision tool (over-seg 23% → 7.8%), kept as an
+option, not the fix.
+
+**A fixed detector window is not a free replacement for the oracle regime
+length.** v1H with $W$ from a fixed 500: P 0.354. The oracle $\min_k |w^*_k|$
+was doing real work. v1L tolerates it far better (§7.4) but still pays ≈ 0.05
+$F_1$; a data-driven $W$ remains open.
+
+### 7.3 The statistic was the problem — and the Fisher scale was the next one
+
+| detector | statistic | P | R | $F_1$ | under | over | recall by position (0…5) |
+|---|---|---|---|---|---|---|---|
+| v1J, $\gamma$ 2.0 | Fisher-standardised max | 0.615 | **0.957** | 0.749 | **5.5%** | 47.3% | 0.98 0.93 0.96 0.94 0.95 0.97 |
+| v1J, $\gamma$ 2.5 | | 0.741 | 0.943 | 0.830 | 9.0% | 29.2% | 0.98 0.91 0.94 0.93 0.93 0.95 |
+| v1K, $\gamma$ 2.5 | + per-pair robust scale | **0.944** | 0.826 | 0.881 | 31.2% | **4.0%** | 0.97 0.78 0.77 0.70 0.74 0.77 |
+| v1L, $\gamma$ 2.0 | + scale re-estimated after pass 1 | 0.845 | 0.901 | 0.872 | 15.7% | 20.8% | 0.97 0.86 0.89 0.82 0.89 0.90 |
+| v1L, $\gamma$ 2.5 | | 0.912 | 0.867 | **0.889** | 23.0% | 9.0% | 0.97 0.83 0.84 0.78 0.80 0.81 |
+| v1L, $\gamma$ 3.0 | | 0.931 | 0.826 | 0.876 | 30.3% | 5.5% | — |
+
+v1J confirmed the mechanism of §2.3 outright: the max-pair statistic with the
+analytic threshold removes the positional decay entirely and lifts recall to
+0.96. Its false alarms were not a $\gamma$ problem. Measured on real grid
+regimes with no change point, the pooled null sd of $\zeta$ is
+**1.22 / 1.20 / 1.30 / 1.66 at $p$ = 3 / 6 / 9 / 12** — the Gaussian
+i.i.d. variance $1/(W-3)$ is too small and the error grows with $p$ (Laplace
+innovations, strong $\rho$, pink noise). Per-step false-alarm rate at $p=12$:
+0.32 at $\gamma=2$ against 6.5e-5 predicted; 0.035 even at $\gamma=5$. No
+global $\gamma$ serves every $p$.
+
+v1K studentises each pair by $1.4826 \cdot \operatorname{MAD}_t \zeta_{ij}$
+over the series: null sd 0.87 / 0.87 / 0.83 / 0.91, false-alarm rate 0.000
+at every $p$ for $\gamma = 3$. Precision 0.94, flat in $p$. But it lost
+recall at every position after the first: the change-point bumps (width $2W$
+each, up to a third of a short-regime series) inflate the MAD.
+
+v1L re-estimates the scale after a first pass, masking $\pm W$ around its
+change points. It recovered 4.1 pp of recall for 3.2 pp of precision and has
+the best $F_1$. The step after position 0 narrowed but did not close: one
+pass only masks the change points it found. The predicted "P ≈ 0.93 with
+R ≈ 0.90+" was optimistic; R 0.867 at that precision, 0.901 at P 0.845.
+
+### 7.4 Robustness to a non-oracle window ($W$ from a fixed 500)
+
+| | oracle $W$ | fixed $W$ | $\Delta F_1$ |
+|---|---|---|---|
+| v1H | 0.633 | 0.454 | −0.18 |
+| v1K $\gamma$ 3.0 | 0.861 | 0.789 | −0.07 |
+| v1L $\gamma$ 2.5 | 0.889 | 0.840 | −0.05 |
+
+### 7.5 Where this leaves the choice
+
+v1L and v1J lie on one precision–recall frontier; v1L extends it on the
+precision side, v1J holds the recall end. Detection $F_1$ cannot choose
+between a missed change point (a window spanning two regimes, scored against
+one) and a spurious one (a regime split into two windows of the same graph);
+the structure metrics can. L3 is being run with v1J $\gamma$ 2.5, v1L
+$\gamma$ 2.0 and v1L $\gamma$ 2.5 on the same 600 scenarios
+(`run_l3_head_to_head.sh`); the winner takes the full ladder.
