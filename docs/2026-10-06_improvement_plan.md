@@ -560,3 +560,98 @@ one) and a spurious one (a regime split into two windows of the same graph);
 the structure metrics can. L3 is being run with v1J $\gamma$ 2.5, v1L
 $\gamma$ 2.0 and v1L $\gamma$ 2.5 on the same 600 scenarios
 (`run_l3_head_to_head.sh`); the winner takes the full ladder.
+
+---
+
+## 8. The adjacency convention (found 2026-10-06, after §7)
+
+This supersedes every structure number in §1, §2.4, §4 and in the October-5
+results. It was found because the cold-start pipeline (§2.4) collapsed to
+per-regime recall 0.05 on the validation sample, which no legitimate removal
+of a window-0 prior could explain.
+
+### 8.1 Three conventions, no conversion
+
+| object | layout | where |
+|---|---|---|
+| ground truth $A^\*$, every metric | $A[\text{from}, \text{to}]$ | generator, `compute_shd`, `metrics.py` |
+| `lingam` output | $B[\text{to}, \text{from}]$ | `DirectLiNGAM.adjacency_matrix_`, `ICALiNGAM` |
+| CausalMorph prior | parents of $i$ read from **row** $i$, i.e. $[\text{to}, \text{from}]$ | `causalmorph_algorithm.py:202` |
+
+Measured on a 2-variable SEM $x_1 \to x_2$: `lingam` returns $B_{10} = 0.84$.
+Measured on grid scenarios, recall of window 0 scored as-is / scored on the
+transpose:
+
+| path | p=6 | p=9 |
+|---|---|---|
+| oracle-seeded (the October configuration) | 1.00 / 0.00 | 0.75 / 0.00 |
+| cold start | 0.00 / 1.00 | 0.00 / 0.75 |
+| cold start with its prior transposed | 1.00 / 0.00 | 0.75 / 0.00 |
+
+### 8.2 What happened in the October pipeline
+
+1. `compute_shd(B_{\text{lingam}}, A^\*)` compared $[\text{to},\text{from}]$
+   with $[\text{from},\text{to}]$ elementwise: **a reversed edge scored as a
+   true positive, a correct edge as a false positive plus a false negative.**
+2. The oracle prior $A^\*_0$ was handed to CausalMorph in $[\text{from},\text{to}]$;
+   CausalMorph read it as the reversed graph. Its transform imposes the
+   prior's orientation, so DirectLiNGAM on the transformed window returned
+   the reversed graph — which (1) then scored as correct. The two errors
+   cancelled for the seeded pipeline and compounded for everything else.
+3. The chain prior, $\mathbb{1}[|B_{\text{lingam}}| > \tau]$, carried the
+   reversal forward window by window.
+4. The prior-free baselines (DirectLiNGAM, ICA-LiNGAM per window) produced
+   correctly oriented graphs and were scored against the transpose. Their
+   reported $F_1$ of 0.136 and 0.014, and the 99.4% / 99.99% win-rates
+   against them, are artefacts of (1).
+
+So the October tables measured the pipeline's ability to recover the
+**reverse** of the true DAG, seeded with the reverse of the true prior. The
+"anchor leak" of §2.4 was not a 1.5× effect on window 0; it was the
+orientation of every edge.
+
+### 8.3 The fix
+
+One convention inside `full_pipeline.py`: $A[\text{from},\text{to}]$.
+`_from_lingam(B) = B^\top$ at all five `lingam` outputs; `_to_causalmorph(A)
+= A^\top$ at all three CausalMorph calls; `_residual_indep_score` takes
+$A[\text{from},\text{to}]$ ($E = X - XA$). Scoring unchanged. Tests on a
+$V_1 \to V_2 \to V_3$ SEM: cold pipeline, bootstrap pipeline and both baseline
+learners now score recall $\ge 0.5$ against the truth (each was 0.0 with
+SHD 4 — both edges missing, both reversals present).
+
+### 8.4 First corrected numbers (600-scenario sample, same scenarios)
+
+L2 = v1H windows, cold start, **no bootstrap**, consensus 0.5, merge-for-extraction.
+
+| metric | Oct-5 "winning" as reported | L2, corrected |
+|---|---|---|
+| per-regime precision ↑ | 0.469 | **0.681** |
+| per-regime recall ↑ | 0.433 | **0.593** |
+| mean nSHD ↓ | 0.231 | **0.154** |
+| windowed nSHD ↓ | 0.245 | **0.163** |
+| transition SHD ↓ | 0.186 | **0.130** |
+| dynamic score ↓ | 0.222 | **0.167** |
+| consensus precision ↑ | 0.338 | **0.693** |
+| consensus recall ↑ | 0.724 (complete-graph bug, §2.1) | 0.396 |
+| consensus $F_1$ ↑ | 0.426 | **0.488** |
+
+The pipeline without bootstrap and without any oracle beats every October
+figure. It was always better than it reported.
+
+### 8.5 What this changes in the plan
+
+- §4's predictions for structure metrics are void; §4's detection
+  predictions stand (detection never touches adjacencies).
+- The honest "before" for any before/after comparison is the old
+  configuration **re-scored under the fixed convention**
+  (`--oracle_anchor --consensus_threshold 0.2 --legacy_postprocessing`, row
+  `C0_legacy`), not the October CSVs. The October CSVs stay as the record of
+  what was reported.
+- The baseline comparison (C3, X1) must be redone; the LiNGAM baselines are
+  far stronger than reported and the pipeline's margin over them is now a
+  real, measurable quantity rather than a metric artefact.
+- `causalmorph/utils/metrics.py` and any notebook that scores `lingam`
+  output against `nx`-generated truth should be audited for the same
+  comparison. The KBS paper's evaluation code is a separate codebase and is
+  not covered by this audit.
