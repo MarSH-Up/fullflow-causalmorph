@@ -289,6 +289,58 @@ class RefinedScale(unittest.TestCase):
         self.assertLessEqual(fp, 1, f"refined false positives {fp}: {refined}")
 
 
+class AdjacencyConvention(unittest.TestCase):
+    """One convention everywhere: adjacency[from, to], the generator's.
+    lingam returns B[to, from] and CausalMorph reads parents from rows, i.e.
+    also [to, from]; both must be converted at the boundary, never scored raw."""
+
+    @staticmethod
+    def _chain_sem(T=3000, seed=21):
+        rng = np.random.default_rng(seed)
+        e = rng.laplace(size=(T, 3))
+        x1 = e[:, 0]; x2 = 0.9 * x1 + e[:, 1]; x3 = 0.9 * x2 + e[:, 2]
+        X = np.c_[x1, x2, x3]
+        names = ["V1", "V2", "V3"]
+        A = _adj(names, [("V1", "V2"), ("V2", "V3")])      # [from, to]
+        return X, names, A
+
+    def test_cold_pipeline_output_is_scored_in_truth_convention(self):
+        from full_pipeline import extract_causal_structures, compute_shd
+        X, names, A = self._chain_sem()
+        s = extract_causal_structures(X, [], names, verbose=False, bootstrap_n=0)[0]
+        m = compute_shd(s.adjacency_matrix, A)
+        self.assertGreaterEqual(m["Recall"], 0.5, f"cold output scored against truth: {m}")
+        self.assertNotEqual(s.adjacency_matrix.loc["V1", "V2"], 0.0, "V1 -> V2 must sit at [from, to]")
+        self.assertEqual(s.adjacency_matrix.loc["V2", "V1"], 0.0)
+
+    def test_baseline_learners_are_scored_in_truth_convention(self):
+        from full_pipeline import extract_causal_structures_ablation, compute_shd
+        X, names, A = self._chain_sem()
+        res = extract_causal_structures_ablation(X, [], names, verbose=False, seed=1)
+        for method in ("directlingam", "icalingam"):
+            m = compute_shd(res[method][0].adjacency_matrix, A)
+            self.assertGreaterEqual(m["Recall"], 0.5, f"{method} scored against truth: {m}")
+
+    def test_bootstrap_output_is_in_truth_convention(self):
+        from full_pipeline import extract_causal_structures, compute_shd
+        X, names, A = self._chain_sem()
+        s = extract_causal_structures(X, [], names, verbose=False, bootstrap_n=5, bootstrap_threshold=0.5)[0]
+        m = compute_shd(s.adjacency_matrix, A)
+        self.assertGreaterEqual(m["Recall"], 0.5, f"bootstrap output scored against truth: {m}")
+        self.assertEqual(s.edge_probs.shape, (3, 3))
+        self.assertGreater(s.edge_probs[0, 1], s.edge_probs[1, 0], "edge_probs must be [from, to] too")
+
+    def test_true_prior_in_truth_convention_is_not_reversed(self):
+        # regression lock (passes today by a double reversal; must keep passing
+        # for the right reason once the boundary conversion is in place)
+        from full_pipeline import extract_causal_structures, compute_shd
+        X, names, A = self._chain_sem()
+        s = extract_causal_structures(X, [], names, verbose=False, bootstrap_n=0,
+                                      initial_adj=A, initial_order=[0, 1, 2])[0]
+        m = compute_shd(s.adjacency_matrix, A)
+        self.assertGreaterEqual(m["Recall"], 0.5, f"oracle-prior output: {m}")
+
+
 # ── 2.6 generator schedule ───────────────────────────────────────────────────
 
 class ChangeSchedule(unittest.TestCase):

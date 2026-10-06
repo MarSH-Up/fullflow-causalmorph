@@ -84,6 +84,31 @@ def assign_true_regime(
     return best_regime
 
 
+# ── Adjacency convention ─────────────────────────────────────────────────────
+# Everything in this module stores a graph as A[from, to] — the generator's
+# convention, the one the ground truth and every metric use. Two libraries do
+# not: lingam returns B[to, from] (B[i, j] is the effect of x_j on x_i), and
+# CausalMorph reads the parents of variable i from ROW i of the adjacency it is
+# given, i.e. it also wants [to, from]. Convert at those two boundaries only.
+#
+# Before 2026-10-06 neither conversion existed. lingam's output was scored
+# raw against the truth, which rewards reversed edges and penalises correct
+# ones; and the ground-truth prior was handed to CausalMorph in [from, to],
+# which it read as the reversed graph and — since its transform imposes the
+# prior's orientation — echoed back reversed, where the transposed metric
+# then scored it as correct. The two errors cancelled for the oracle-seeded
+# pipeline and compounded for the prior-free baselines.
+
+def _from_lingam(B) -> np.ndarray:
+    """lingam adjacency B[to, from] -> A[from, to]."""
+    return np.asarray(B).T
+
+
+def _to_causalmorph(A: pd.DataFrame) -> pd.DataFrame:
+    """A[from, to] -> the [to, from] layout CausalMorph reads parents from."""
+    return A.T
+
+
 def compute_shd(
     pred_adj: pd.DataFrame,
     true_adj: pd.DataFrame,
@@ -198,10 +223,10 @@ def _residual_indep_score(adj_values: np.ndarray, X_raw: np.ndarray) -> float:
     Lower = better: LiNGAM assumes mutually independent residuals, so a fit
     that leaves correlated residuals is worse regardless of which prior was used.
 
-    Residuals: E = X - X @ B.T   (from x = Bx + e  =>  e = (I-B)x)
+    Residuals: E = X - X @ A     (A[from, to]: x_to = sum_from A[from, to] x_from + e)
     Score:     s = mean_{i<j} |corr(E[:,i], E[:,j])|
     """
-    E = X_raw - X_raw @ adj_values.T
+    E = X_raw - X_raw @ adj_values
     p = E.shape[1]
     total, n_pairs = 0.0, 0
     for i in range(p):
@@ -645,7 +670,7 @@ def _bootstrap_fit(
             try:
                 fit_df = causalMorph(
                     sample_df, causal_order=prior_order,
-                    adjacency_matrix=prior_adj, verbose=False,
+                    adjacency_matrix=_to_causalmorph(prior_adj), verbose=False,
                 )
             except Exception:
                 fit_df = sample_df
@@ -657,7 +682,7 @@ def _bootstrap_fit(
             model.fit(fit_df)
         except Exception:
             continue
-        adj_bin = (np.abs(model.adjacency_matrix_) > 0.05).astype(float)
+        adj_bin = (np.abs(_from_lingam(model.adjacency_matrix_)) > 0.05).astype(float)
         np.fill_diagonal(adj_bin, 0.0)
         edge_counts += adj_bin
         key = tuple(model.causal_order_)
@@ -670,7 +695,7 @@ def _bootstrap_fit(
             try:
                 fit_df = causalMorph(
                     window_df, causal_order=prior_order,
-                    adjacency_matrix=prior_adj, verbose=False,
+                    adjacency_matrix=_to_causalmorph(prior_adj), verbose=False,
                 )
             except Exception:
                 fit_df = window_df
@@ -678,7 +703,7 @@ def _bootstrap_fit(
             fit_df = window_df
         model = DirectLiNGAM()
         model.fit(fit_df)
-        adj_bin = (np.abs(model.adjacency_matrix_) > 0.05).astype(float)
+        adj_bin = (np.abs(_from_lingam(model.adjacency_matrix_)) > 0.05).astype(float)
         np.fill_diagonal(adj_bin, 0.0)
         edge_probs = adj_bin
         adj_consensus = adj_bin
@@ -803,7 +828,7 @@ def extract_causal_structures(
                 model_cold = DirectLiNGAM()
                 model_cold.fit(window_df)
                 causal_order_prior = model_cold.causal_order_
-                adj_cold = model_cold.adjacency_matrix_
+                adj_cold = _from_lingam(model_cold.adjacency_matrix_)
                 adj_prior = pd.DataFrame(
                     (np.abs(adj_cold) > 0.05).astype(float),
                     columns=variable_names,
@@ -866,7 +891,7 @@ def extract_causal_structures(
                 transformed = causalMorph(
                     window_df,
                     causal_order=causal_order_prior,
-                    adjacency_matrix=adj_prior,
+                    adjacency_matrix=_to_causalmorph(adj_prior),
                     verbose=False,
                 )
             except Exception as exc:
@@ -879,7 +904,7 @@ def extract_causal_structures(
             model_warm = DirectLiNGAM()
             model_warm.fit(transformed)
             adj_warm = pd.DataFrame(
-                model_warm.adjacency_matrix_,
+                _from_lingam(model_warm.adjacency_matrix_),
                 columns=variable_names,
                 index=variable_names,
             )
@@ -902,7 +927,7 @@ def extract_causal_structures(
                 model_cold_h = DirectLiNGAM()
                 model_cold_h.fit(window_df)
                 adj_cold_h = pd.DataFrame(
-                    model_cold_h.adjacency_matrix_,
+                    _from_lingam(model_cold_h.adjacency_matrix_),
                     columns=variable_names,
                     index=variable_names,
                 )
@@ -1026,7 +1051,7 @@ def extract_causal_structures_ablation(
 
         model_dl = DirectLiNGAM()
         model_dl.fit(window_df)
-        adj_dl = pd.DataFrame(model_dl.adjacency_matrix_, columns=variable_names, index=variable_names)
+        adj_dl = pd.DataFrame(_from_lingam(model_dl.adjacency_matrix_), columns=variable_names, index=variable_names)
         results["directlingam"].append(RegimeStructure(
             regime_idx=regime_idx, window_start=start, window_end=end,
             n_samples=n_samples, causal_order=model_dl.causal_order_,
@@ -1037,7 +1062,7 @@ def extract_causal_structures_ablation(
         # produces the same row on every run.
         model_ica = ICALiNGAM(max_iter=3000, random_state=seed + regime_idx)
         model_ica.fit(window_df)
-        adj_ica = pd.DataFrame(model_ica.adjacency_matrix_, columns=variable_names, index=variable_names)
+        adj_ica = pd.DataFrame(_from_lingam(model_ica.adjacency_matrix_), columns=variable_names, index=variable_names)
         results["icalingam"].append(RegimeStructure(
             regime_idx=regime_idx, window_start=start, window_end=end,
             n_samples=n_samples, causal_order=model_ica.causal_order_,
