@@ -39,7 +39,10 @@ ROW_DEFS=(
   "D_v1H_adaptive   --detector v1H $NOBOOT --no_ablation --adaptive_null"
   "D_v1H_fixedW500  --detector v1H $NOBOOT --no_ablation --fixed_min_regime_len 500"
   "D_v1J            --detector v1J $NOBOOT --no_ablation"
-  # extraction ladder and controls (v1H windows throughout)
+  # the old configuration (oracle anchor, consensus 0.20, 10p^2 deletion, v1H),
+  # re-scored under the corrected adjacency convention: the honest "before"
+  "C0_legacy        --detector v1H $BOOT --oracle_anchor --consensus_threshold 0.2 --legacy_postprocessing --no_ablation"
+  # extraction ladder and controls
   "L2_cold          --detector $DETECTOR $NOBOOT --no_ablation"
   "C3_no_seg        --detector $DETECTOR $NOBOOT --no_segmentation"
   "L3_cold          --detector $DETECTOR $BOOT"

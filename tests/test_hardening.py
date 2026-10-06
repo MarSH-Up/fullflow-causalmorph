@@ -450,6 +450,48 @@ class RunOneFlags(unittest.TestCase):
         self.assertEqual(row["n_cps_merged"], 1)
 
 
+class LegacyPostprocessing(unittest.TestCase):
+    """--legacy_postprocessing reproduces the pre-2026-10-06 post-processing:
+    change points bounding a window shorter than max(min_samples/2, 10 p^2)
+    are deleted, and detection is scored AFTER that deletion. It exists so
+    the old configuration can be re-scored under the corrected adjacency
+    convention as an honest 'before'."""
+
+    def test_legacy_deletes_and_scores_after_deletion(self):
+        from run_experiments import run_loaded
+        X, names, true_cps, true_adjs, sizes = _tiny_scenario()
+        meta = dict(scenario_id="t", p=3, n_regimes=2, n_changes=1, samples_regime=500,
+                    base_pconn=0.5, noise_fraction=0.02, seed=11)
+        base = dict(window_overlap=0.0, detector_version="v1H", prior_mode="chain", hybrid=False,
+                    bootstrap_n=0, bootstrap_threshold=0.6, chain_prior_threshold=0.05,
+                    run_ablation=False, oracle_segmentation=True, samples_per_node=100000)
+        # Every window is "too short" under both rules (samples_per_node drives the
+        # new n_min, min_samples drives the legacy one): the new path keeps the
+        # change point for detection and merges for extraction; legacy deletes it
+        # before scoring, so recall drops to 0 and no change point is reported.
+        new = run_loaded(X, names, true_cps, true_adjs, sizes, min_samples=100000, meta=meta, **base)
+        old = run_loaded(X, names, true_cps, true_adjs, sizes, min_samples=100000, meta=meta,
+                         legacy_postprocessing=True, **base)
+        self.assertEqual(new["det_recall"], 1.0)
+        self.assertEqual(new["n_cps_merged"], 1)
+        self.assertEqual(old["det_recall"], 0.0)
+        self.assertEqual(old["n_detected_cps"], 0)
+        self.assertEqual(old["n_structures"], 1)
+
+    def test_legacy_keeps_change_point_when_windows_are_long_enough(self):
+        from run_experiments import run_loaded
+        X, names, true_cps, true_adjs, sizes = _tiny_scenario()
+        meta = dict(scenario_id="t", p=3, n_regimes=2, n_changes=1, samples_regime=500,
+                    base_pconn=0.5, noise_fraction=0.02, seed=11)
+        old = run_loaded(X, names, true_cps, true_adjs, sizes, min_samples=500, meta=meta,
+                         window_overlap=0.0, detector_version="v1H", prior_mode="chain", hybrid=False,
+                         bootstrap_n=0, bootstrap_threshold=0.6, chain_prior_threshold=0.05,
+                         run_ablation=False, oracle_segmentation=True, legacy_postprocessing=True)
+        # p=3: 10 p^2 = 90 < 500-sample regimes, nothing deleted
+        self.assertEqual(old["det_recall"], 1.0)
+        self.assertEqual(old["n_structures"], 2)
+
+
 # ── 2.5 soft chain prior ─────────────────────────────────────────────────────
 
 class SoftChainPrior(unittest.TestCase):

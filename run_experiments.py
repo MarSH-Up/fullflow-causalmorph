@@ -121,6 +121,36 @@ def detection_cps(det_result) -> List[int]:
     return simplify_transitions(raw, min_distance=160)
 
 
+def legacy_prune(cps: List[int], onset_set: set, T: int, p: int, min_samples: int) -> List[int]:
+    """
+    The pre-2026-10-06 post-processing, kept verbatim for --legacy_postprocessing:
+    repeatedly delete the change point bounding the shortest window until every
+    window has at least max(min_samples // 2, 10 * p * p) samples, preferring to
+    keep onsets. The result was used both for scoring detection and for
+    extraction, so a change point the detector found next to a short regime
+    counted as missed. For p >= 8 the rule exceeds the grid's 500-sample
+    regimes and deletes every change point adjacent to one.
+    """
+    min_window = max(int(min_samples) // 2, 10 * int(p) * int(p))
+    _cps = sorted(int(c) for c in cps)
+    while _cps:
+        _bounds = [0] + _cps + [T]
+        _sizes = [_bounds[i + 1] - _bounds[i] for i in range(len(_bounds) - 1)]
+        if min(_sizes) >= min_window:
+            break
+        min_idx = _sizes.index(min(_sizes))
+        if min_idx == 0:
+            _cps.pop(0)
+        elif min_idx == len(_sizes) - 1:
+            _cps.pop(-1)
+        else:
+            left_cp, right_cp = _bounds[min_idx], _bounds[min_idx + 1]
+            keep = left_cp if (left_cp in onset_set or right_cp not in onset_set) else right_cp
+            _cps.pop(min_idx)
+            _cps[min_idx - 1] = keep
+    return _cps
+
+
 def min_window_for(p: int, samples_per_node: float, floor: int = 250) -> int:
     """
     Smallest window the extraction step will fit a model on: max(floor, c*p).
@@ -335,6 +365,7 @@ def run_loaded(
     adaptive_null: bool = False,
     det_tolerance: int = 200,
     run_ablation: bool = True,
+    legacy_postprocessing: bool = False,
 ) -> dict:
     """
     Run the pipeline on an already-loaded scenario. Returns a flat metrics dict.
@@ -349,6 +380,12 @@ def run_loaded(
                            "ignore non-stationarity" control.
       fixed_min_regime_len use this instead of min(true regime sizes) to size
                            the detector's windows; None keeps the oracle value.
+      legacy_postprocessing
+                           the pre-2026-10-06 deletion rule (see legacy_prune),
+                           applied before scoring detection; no merging. With
+                           --oracle_anchor and --consensus_threshold 0.2 this
+                           reproduces the old configuration exactly, so it can
+                           be re-scored under the corrected adjacency convention.
     """
     ctx = contextlib.redirect_stdout(io.StringIO()) if suppress_output else contextlib.nullcontext()
     p = int(meta["p"]); n_regimes = int(meta["n_regimes"]); seed = int(meta["seed"])
@@ -390,11 +427,18 @@ def run_loaded(
                     corr_gamma=corr_gamma, adaptive_null=adaptive_null,
                 )
                 cps_det = detection_cps(det_result)
+            if legacy_postprocessing:
+                onset_set = set(det_result.onset_points) if det_result is not None else set(cps_det)
+                cps_det = legacy_prune(cps_det, onset_set, T, p, min_samples)
             eval_result = evaluate_detection(true_cps, cps_det, tolerance=det_tolerance)
 
             # ── Extraction windows (merge, never delete) ─────────────────────
-            n_min = min_window_for(p, samples_per_node)
-            cps_ext, absorbed = extraction_windows(cps_det, T, n_min)
+            if legacy_postprocessing:
+                n_min = max(int(min_samples) // 2, 10 * p * p)
+                cps_ext, absorbed = list(cps_det), []
+            else:
+                n_min = min_window_for(p, samples_per_node)
+                cps_ext, absorbed = extraction_windows(cps_det, T, n_min)
 
             structures = extract_causal_structures(
                 X=X, detected_change_points=cps_ext, variable_names=variable_names,
@@ -457,6 +501,7 @@ def run_loaded(
             "segmentation_mode":  ("none" if no_segmentation else
                                    "oracle" if oracle_segmentation else detector_version),
             "min_regime_len_used": min_regime_len,
+            "postprocessing_mode": "legacy" if legacy_postprocessing else "merge",
             "status":             "ok",
             "error_msg":          "",
         })
@@ -831,6 +876,8 @@ if __name__ == "__main__":
                      help="Matching tolerance (samples) for detection precision/recall")
     exp.add_argument("--no_ablation",          action="store_true",
                      help="Skip the DirectLiNGAM / ICA-LiNGAM per-window baselines")
+    exp.add_argument("--legacy_postprocessing", action="store_true",
+                     help="Pre-2026-10-06 deletion rule max(min_samples/2, 10p^2), scored before extraction (old 'before')")
     args = parser.parse_args()
 
     run_experiments(
@@ -857,4 +904,5 @@ if __name__ == "__main__":
         chain_soft_lambda=args.chain_soft_lambda, corr_gamma=args.corr_gamma,
         adaptive_null=args.adaptive_null, det_tolerance=args.det_tolerance,
         run_ablation=not args.no_ablation,
+        legacy_postprocessing=args.legacy_postprocessing,
     )
