@@ -1,0 +1,280 @@
+#!/usr/bin/env python3
+"""
+Before / after figures for the pipeline hardening, on the 600-scenario
+validation sample. "Before" is the October-5 full-grid run (oracle anchor, old
+consensus, old pruning, v1H) restricted to the same scenarios; "after" is the
+chosen detector with cold start, merge-for-extraction and the 0.5 consensus.
+
+Usage:
+    python plot_before_after.py --det_row D_v1L_g2.5 --l3_row L3_cold_v1L25 \
+        --out results/hardening_validation/figures
+    # optional, for the decomposition panel:
+        --c1_row C1_oracle_anchor_v1L --c2_row C2_oracle_seg_v1L --l2_row L2_cold_v1L
+"""
+import argparse
+import os
+import re
+
+import numpy as np
+import pandas as pd
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+from analyze_hardening_validation import load, parse, match, paired, HEAD
+
+BLUE, ORANGE, TEAL, PURPLE, MAGENTA = "#2a78d6", "#eb6834", "#0f8a7a", "#8b5bd6", "#d1458f"
+SURFACE, INK, INK_2, MUTED, GRID, AXIS, GOOD = "#ffffff", "#0b0b0b", "#52514e", "#898781", "#e1e0d9", "#c3c2b7", "#006300"
+BAR_W, GAP = 0.36, 0.02
+
+
+def style():
+    matplotlib.rcParams.update({
+        "figure.facecolor": SURFACE, "axes.facecolor": SURFACE, "savefig.facecolor": SURFACE,
+        "font.family": "sans-serif",
+        "font.sans-serif": ["Helvetica Neue", "Helvetica", "Arial", "DejaVu Sans"],
+        "text.color": INK, "axes.edgecolor": AXIS, "axes.labelcolor": INK_2,
+        "axes.titlecolor": INK, "axes.titlesize": 12, "axes.titleweight": "bold",
+        "axes.titlelocation": "left", "axes.labelsize": 10,
+        "axes.spines.top": False, "axes.spines.right": False,
+        "axes.grid": True, "grid.color": GRID, "grid.linewidth": 0.8, "axes.axisbelow": True,
+        "xtick.color": MUTED, "ytick.color": MUTED, "xtick.labelsize": 9.5, "ytick.labelsize": 9.5,
+        "legend.frameon": False, "legend.fontsize": 9.5,
+        "savefig.dpi": 220, "savefig.bbox": "tight", "savefig.pad_inches": 0.15,
+    })
+
+
+def header(fig, title, subtitle=None):
+    h = fig.get_figheight() * 72.0
+    fig.suptitle(title, x=0.005, y=1 + 17 / h, ha="left", va="bottom", fontsize=13, fontweight="bold")
+    if subtitle:
+        fig.text(0.005, 1 + 4 / h, subtitle, ha="left", va="bottom", fontsize=9.5, color=INK_2)
+
+
+def save(fig, out, name):
+    fig.savefig(os.path.join(out, name)); plt.close(fig); print(f"  {name}")
+
+
+# ── detection helpers ─────────────────────────────────────────────────────────
+
+def micro(d, tol=200):
+    TP = FP = FN = 0
+    for tc, dc in zip(d.true_cps.map(parse), d.detected_cps.map(parse)):
+        a, b, c = match(tc, dc, tol); TP += a; FP += b; FN += c
+    P = TP / (TP + FP) if TP + FP else 0.0
+    R = TP / (TP + FN) if TP + FN else 0.0
+    return P, R, (2 * P * R / (P + R) if P + R else 0.0)
+
+
+def recall_by_position(d, tol=200):
+    hits = {}
+    for tc, dc in zip(d.true_cps.map(parse), d.detected_cps.map(parse)):
+        for k, t in enumerate(sorted(tc)):
+            hits.setdefault(k, []).append(any(abs(x - t) <= tol for x in dc))
+    return {k: (np.mean(v), len(v)) for k, v in hits.items() if len(v) >= 10}
+
+
+# ── figures ───────────────────────────────────────────────────────────────────
+
+def fig_detection_summary(before, after, label_after, out):
+    fig, axes = plt.subplots(1, 3, figsize=(11.4, 3.8), gridspec_kw={"width_ratios": [1.1, 1.3, 1.3]})
+
+    # (a) P / R / F1
+    ax = axes[0]
+    pb, pa = micro(before), micro(after)
+    x = np.arange(3)
+    ax.bar(x - BAR_W / 2 - GAP, pb, BAR_W, color=ORANGE, label="Before")
+    ax.bar(x + BAR_W / 2 + GAP, pa, BAR_W, color=BLUE, label=label_after)
+    for i in range(3):
+        d = pa[i] - pb[i]
+        ax.text(i + BAR_W / 2 + GAP, pa[i] + 0.02, f"{d:+.2f}", ha="center", fontsize=9,
+                color=GOOD if d >= 0 else ORANGE, fontweight="bold")
+    ax.set_xticks(x); ax.set_xticklabels(["precision", "recall", "F1"])
+    ax.set_ylim(0, 1.38); ax.set_yticks([0, 0.2, 0.4, 0.6, 0.8, 1.0])
+    ax.set_title("Detection, tolerance 200", fontsize=11)
+    ax.legend(loc="upper left", ncol=1, bbox_to_anchor=(0.0, 1.0))
+
+    # (b) recall by change-point position
+    ax = axes[1]
+    for d, c, lab in ((before, ORANGE, "Before"), (after, BLUE, label_after)):
+        r = recall_by_position(d)
+        ks = sorted(r)
+        ax.plot(ks, [r[k][0] for k in ks], "-o", color=c, lw=2, ms=5, label=lab)
+    ax.set_ylim(0, 1.05); ax.set_xlabel("position of the true change point in the series")
+    ax.set_title("Recall by change-point position", fontsize=11)
+    ax.legend(loc="lower left")
+
+    # (c) recall by p
+    ax = axes[2]
+    for d, c, lab in ((before, ORANGE, "Before"), (after, BLUE, label_after)):
+        ps = sorted(d.p.unique())
+        ax.plot(ps, [micro(d[d.p == p_])[1] for p_ in ps], "-o", color=c, lw=2, ms=5, label=lab)
+    ax.set_ylim(0, 1.05); ax.set_xlabel("nodes  $p$"); ax.set_xticks(sorted(after.p.unique()))
+    ax.set_title("Recall by problem size", fontsize=11)
+    ax.legend(loc="lower left")
+
+    header(fig, "Change-point detection: before and after",
+           "600 stratified scenarios (60 per p), same scenarios in both. "
+           "The positional decay and the collapse at large p are gone.")
+    fig.tight_layout()
+    save(fig, out, "A_detection_before_after.png")
+
+
+def fig_detection_tolerance(before, after, label_after, out):
+    fig, ax = plt.subplots(figsize=(7.5, 3.6))
+    tols = [25, 50, 100, 200, 300]
+    for d, c, lab in ((before, ORANGE, "Before"), (after, BLUE, label_after)):
+        ax.plot(tols, [micro(d, t)[1] for t in tols], "-o", color=c, lw=2, ms=5, label=lab)
+    ax.set_xscale("log"); ax.set_xticks(tols); ax.set_xticklabels([str(t) for t in tols])
+    ax.set_xlabel("matching tolerance (samples)"); ax.set_ylabel("recall"); ax.set_ylim(0, 1.05)
+    ax.legend(loc="lower right")
+    header(fig, "Localisation is sharp in both versions",
+           "Recall barely moves with tolerance: when a change point is found it is within a few samples. "
+           "The gain is in finding them at all.")
+    fig.tight_layout()
+    save(fig, out, "B_detection_tolerance.png")
+
+
+def fig_segmentation_outcome(before, after, label_after, out):
+    fig, ax = plt.subplots(figsize=(7.5, 3.4))
+    cats = ["under-segmented", "exact", "over-segmented", "no detection"]
+    def shares(d):
+        return [(d.n_structures < d.n_regimes).mean(), (d.n_structures == d.n_regimes).mean(),
+                (d.n_structures > d.n_regimes).mean(), (d.n_detected_cps == 0).mean()]
+    sb, sa = shares(before), shares(after)
+    x = np.arange(len(cats))
+    ax.bar(x - BAR_W / 2 - GAP, sb, BAR_W, color=ORANGE, label="Before")
+    ax.bar(x + BAR_W / 2 + GAP, sa, BAR_W, color=BLUE, label=label_after)
+    for i in range(len(cats)):
+        ax.text(i - BAR_W / 2 - GAP, sb[i] + 0.012, f"{sb[i]:.0%}", ha="center", fontsize=9, color=INK_2)
+        ax.text(i + BAR_W / 2 + GAP, sa[i] + 0.012, f"{sa[i]:.0%}", ha="center", fontsize=9, color=INK_2)
+    ax.set_xticks(x); ax.set_xticklabels(cats); ax.set_ylim(0, max(sb + sa) * 1.25)
+    ax.yaxis.set_major_formatter(lambda v, _: f"{v:.0%}")
+    ax.set_ylabel("share of scenarios"); ax.legend(loc="upper right")
+    header(fig, "How often the segmentation matches the true number of regimes",
+           "Under-segmentation is the error extraction cannot repair: a window spanning two regimes is "
+           "scored against one of them.")
+    fig.tight_layout()
+    save(fig, out, "C_segmentation_outcome.png")
+
+
+def fig_structure(before, after, label_after, out):
+    hi = [(c, m) for c, m, hib in HEAD if hib and c in after and c in before]
+    lo = [(c, m) for c, m, hib in HEAD if not hib and c in after and c in before]
+    fig, axes = plt.subplots(1, 2, figsize=(11.4, 4.3), gridspec_kw={"width_ratios": [len(hi), len(lo)]})
+    for ax, sel, title in ((axes[0], hi, "Recovery  (higher is better)"), (axes[1], lo, "Error  (lower is better)")):
+        x = np.arange(len(sel))
+        vb = [before[c].mean() for c, _ in sel]; va = [after[c].mean() for c, _ in sel]
+        ax.bar(x - BAR_W / 2 - GAP, vb, BAR_W, color=ORANGE, label="Before")
+        ax.bar(x + BAR_W / 2 + GAP, va, BAR_W, color=BLUE, label=label_after)
+        top = max(vb + va)
+        for i, (c, _) in enumerate(sel):
+            r = paired(before, after, c, c in [h[0] for h in hi])
+            if r:
+                sign = "+" if r["rel"] >= 0 else "−"
+                ax.text(i + BAR_W / 2 + GAP, va[i] + top * 0.03, f"{sign}{abs(r['rel']):.0f}%",
+                        ha="center", fontsize=9, color=GOOD if r["rel"] >= 0 else ORANGE, fontweight="bold")
+        ax.set_xticks(x); ax.set_xticklabels([m.replace(" ", "\n", 1) for _, m in sel])
+        ax.set_ylim(0, top * 1.25); ax.set_title(title, fontsize=11)
+    axes[0].set_ylabel("mean over the sample"); axes[0].legend(loc="upper right")
+    header(fig, "Structure recovery: before and after",
+           "Green/orange = relative change, positive = better. Both versions scored under the corrected "
+           "adjacency convention; 'before' is the old configuration (oracle seed, old consensus, old pruning).")
+    fig.tight_layout()
+    save(fig, out, "D_structure_before_after.png")
+
+
+def fig_consensus_windows(before, after, label_after, out):
+    fig, axes = plt.subplots(1, 2, figsize=(11.4, 3.6), sharey=True)
+    for ax, d, lab, c in ((axes[0], before, "Before", ORANGE), (axes[1], after, label_after, BLUE)):
+        nw = (d["n_windows_ext"] if "n_windows_ext" in d else d["n_structures"]).clip(upper=4)
+        g = d.groupby(nw).agg(recall=("consensus_recall", "mean"), precision=("consensus_precision", "mean"))
+        x = np.arange(len(g))
+        ax.bar(x - BAR_W / 2 - GAP, g.recall, BAR_W, color=c, label="consensus recall")
+        ax.bar(x + BAR_W / 2 + GAP, g.precision, BAR_W, color=c, alpha=0.45, label="consensus precision")
+        for i, v in enumerate(g.recall):
+            ax.text(i - BAR_W / 2 - GAP, v + 0.02, f"{v:.2f}", ha="center", fontsize=9, color=INK_2)
+        ax.set_xticks(x); ax.set_xticklabels([f"{int(k)}" if k < 4 else "4+" for k in g.index])
+        ax.set_xlabel("extraction windows in the scenario"); ax.set_title(lab, fontsize=11)
+        ax.set_ylim(0, 1.15); ax.legend(loc="upper right")
+    header(fig, "The consensus graph with one or two windows",
+           "Before: recall exactly 1.000 at 1 and 2 windows — the aggregator admitted every edge (posterior of an "
+           "unvoted edge, 1/(n+2), exceeded the 0.20 threshold). After: majority rule.")
+    fig.tight_layout()
+    save(fig, out, "E_consensus_by_windows.png")
+
+
+def fig_decomposition(l3, c1, c2, l2, label_after, out):
+    """Paired differences on the structure-over-time metrics."""
+    comps = [("ground-truth seed of window 0\n(C1 − L3)", c1, True),
+             ("perfect segmentation\n(C2 − L3)", c2, True),
+             ("bootstrap + overlap\n(L3 − L2)", l2, False)]
+    comps = [(lab, d, flip) for lab, d, flip in comps if d is not None]
+    if not comps:
+        return
+    mets = [("windowed_nshd_weighted", "windowed nSHD"), ("transition_shd", "transition SHD"),
+            ("mean_struct_precision", "per-regime precision")]
+    fig, axes = plt.subplots(1, len(mets), figsize=(11.4, 3.8))
+    for ax, (col, mlab) in zip(axes, mets):
+        hib = col == "mean_struct_precision"
+        vals, cols = [], []
+        for lab, d, flip in comps:
+            r = paired(l3, d, col, hib) if flip else paired(d, l3, col, hib)
+            vals.append(r["rel"] if r else 0.0)
+            cols.append(TEAL if flip else BLUE)
+        x = np.arange(len(comps))
+        ax.bar(x, vals, 0.55, color=cols)
+        ax.axhline(0, color=INK, lw=1.1)
+        for xi, v in zip(x, vals):
+            ax.text(xi, v + (0.4 if v >= 0 else -0.9), f"{v:+.1f}%", ha="center", fontsize=9, color=INK_2, fontweight="bold")
+        ax.set_xticks(x); ax.set_xticklabels([lab for lab, _, _ in comps], fontsize=8.5)
+        ax.set_title(mlab, fontsize=11); ax.grid(axis="x", visible=False)
+        lo, hi = min(vals + [0]), max(vals + [0]); ax.set_ylim(lo - 2, hi + 2.5)
+    axes[0].set_ylabel("relative improvement over the pipeline (%)")
+    header(fig, "What each piece is worth, on the same scenarios",
+           "Teal = how much better the pipeline would do with an oracle (the size of the leak the old results "
+           "carried; the cost of imperfect detection). Blue = what bootstrap + overlap add, cold start.")
+    fig.tight_layout()
+    save(fig, out, "F_decomposition.png")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--val", default="results/hardening_validation")
+    ap.add_argument("--before", default="results/results_october_5")
+    ap.add_argument("--before_row", default=None,
+                    help="use this validation row as 'before' (e.g. C0_legacy_v2: the old configuration re-scored "
+                         "under the corrected adjacency convention) instead of the October-5 CSV, which scored "
+                         "transposed adjacencies and is not comparable")
+    ap.add_argument("--det_row", required=True, help="detection-only row for the after detector, e.g. D_v1L_g2.5")
+    ap.add_argument("--l3_row", required=True, help="L3 row for the after pipeline, e.g. L3_cold_v1L25")
+    ap.add_argument("--label", default="After")
+    ap.add_argument("--c1_row", default=None); ap.add_argument("--c2_row", default=None); ap.add_argument("--l2_row", default=None)
+    ap.add_argument("--out", default="results/hardening_validation/figures")
+    args = ap.parse_args()
+
+    os.makedirs(args.out, exist_ok=True); style()
+    ids = {ln.strip() for ln in open(os.path.join(args.val, "sample_ids.txt")) if ln.strip()}
+    if args.before_row:
+        before = load(os.path.join(args.val, args.before_row, "results.csv"))
+    else:
+        before = load(os.path.join(args.before, "v1h_full_winning/results.csv"), ids)
+    det = load(os.path.join(args.val, args.det_row, "results.csv"))
+    l3 = load(os.path.join(args.val, args.l3_row, "results.csv"))
+    common = set(before.index) & set(det.index) & set(l3.index)
+    before, det, l3 = before[before.index.isin(common)], det[det.index.isin(common)], l3[l3.index.isin(common)]
+    print(f"scenarios in every row: {len(common)}\nwriting to {args.out}/")
+
+    fig_detection_summary(before, det, args.label, args.out)
+    fig_detection_tolerance(before, det, args.label, args.out)
+    fig_segmentation_outcome(before, l3, args.label, args.out)
+    fig_structure(before, l3, args.label, args.out)
+    fig_consensus_windows(before, l3, args.label, args.out)
+    opt = {k: (load(os.path.join(args.val, v, "results.csv")) if v else None)
+           for k, v in (("c1", args.c1_row), ("c2", args.c2_row), ("l2", args.l2_row))}
+    opt = {k: (d[d.index.isin(common)] if d is not None else None) for k, d in opt.items()}
+    fig_decomposition(l3, opt["c1"], opt["c2"], opt["l2"], args.label, args.out)
+
+
+if __name__ == "__main__":
+    main()
