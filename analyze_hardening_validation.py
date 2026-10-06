@@ -136,17 +136,24 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--val", default="results/hardening_validation")
     ap.add_argument("--before", default="results/results_october_5")
+    ap.add_argument("--ladder_suffix", default="",
+                    help="suffix of the ladder/control rows to analyse, e.g. _v1K (detection rows are unaffected)")
     args = ap.parse_args()
 
     ids = {ln.strip() for ln in open(os.path.join(args.val, "sample_ids.txt")) if ln.strip()}
     before_w = load(os.path.join(args.before, "v1h_full_winning/results.csv"), ids)
     before_b = load(os.path.join(args.before, "v1h_full_baseline/results.csv"), ids)
-    names = ["D_v1H", "D_v1H_adaptive", "D_v1H_fixedW500", "D_v1J",
-             "L2_cold", "C3_no_seg", "L3_cold", "C1_oracle_anchor", "C2_oracle_seg", "L4_soft_chain"]
+    det_names = ["D_v1H", "D_v1H_adaptive", "D_v1H_fixedW500", "D_v1J"]
+    lad_names = ["L2_cold", "C3_no_seg", "L3_cold", "C1_oracle_anchor", "C2_oracle_seg", "L4_soft_chain"]
     sweep = sorted(n for n in os.listdir(args.val)
                    if n.startswith(("D_v1J_g", "D_v1K_g")) and os.path.exists(os.path.join(args.val, n, "results.csv")))
-    names += [n for n in sweep if n not in names]
-    rows = {n: load(os.path.join(args.val, n, "results.csv")) for n in names}
+    names = det_names + [n for n in sweep if n not in det_names] + lad_names
+    rows = {n: load(os.path.join(args.val, n, "results.csv")) for n in names if n.startswith("D_")}
+    # ladder rows are keyed by their base name so the rest of the script is suffix-agnostic
+    for n in lad_names:
+        rows[n] = load(os.path.join(args.val, n + args.ladder_suffix, "results.csv"))
+    if args.ladder_suffix:
+        print(f"ladder rows: *{args.ladder_suffix}")
     done = [n for n, d in rows.items() if d is not None and len(d)]
     print("rows available:", ", ".join(f"{n}({len(rows[n])})" for n in done))
     print(f"before (Oct-5) on the same scenarios: winning={len(before_w)} baseline={len(before_b)}")
