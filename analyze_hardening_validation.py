@@ -128,6 +128,54 @@ def ladder_table(rows, ref_name="L3_cold"):
     return pd.DataFrame(lines)
 
 
+def l3_head_to_head(val, before, suffixes):
+    """Same pipeline (L3: bootstrap, cold start), different detectors. The
+    structure-over-time metrics are what the detector has to serve, so they
+    decide; detection P/R are shown only to label the rows."""
+    ids = {ln.strip() for ln in open(os.path.join(val, "sample_ids.txt")) if ln.strip()}
+    rows = {sfx: load(os.path.join(val, f"L3_cold_{sfx}", "results.csv")) for sfx in suffixes}
+    rows = {k: v for k, v in rows.items() if v is not None and len(v)}
+    bw = load(os.path.join(before, "v1h_full_winning/results.csv"), ids)
+    print_block("L3 HEAD-TO-HEAD: detector choice judged on structure metrics  (n = scenarios ok in every row)")
+    common = None
+    for v in rows.values():
+        common = set(v.index) if common is None else common & set(v.index)
+    if bw is not None:
+        rows = {"before(oracle,v1H,old)": bw[bw.index.isin(common)], **{k: v[v.index.isin(common)] for k, v in rows.items()}}
+    else:
+        rows = {k: v[v.index.isin(common)] for k, v in rows.items()}
+    print(f"  n = {len(common)}")
+    dt = detection_table({k: v for k, v in rows.items()})
+    print("\n  detection (for the record):")
+    print(dt[["P@200", "R@200", "F1@200", "under_seg", "over_seg"]].round(3).to_string())
+    print("\n  structure means  (v lower is better, ^ higher is better):")
+    means = pd.DataFrame({k: {f"{m} {'^' if hib else 'v'}": v[c].mean() for c, m, hib in HEAD if c in v}
+                          for k, v in rows.items()})
+    print(means.round(4).to_string())
+    keys = [k for k in rows if not k.startswith("before")]
+    ref = keys[0]
+    print(f"\n  paired vs {ref}  (rel > 0 = that row better than {ref}; win/loss; Wilcoxon p):")
+    for other in keys[1:]:
+        print(f"\n    {other}")
+        for c, m, hib in HEAD:
+            if c not in rows[ref] or c not in rows[other]:
+                continue
+            r = paired(rows[ref], rows[other], c, hib)
+            if r:
+                print(f"      {m:<22} {r['ref']:.4f} -> {r['other']:.4f}  {r['rel']:+6.1f}%  "
+                      f"{r['wins']:>4}/{r['losses']:<4} p={r['p']:.1e}")
+    # the hypothesis itself: does a missed change point cost more than a spurious one?
+    print("\n  hypothesis check — windowed nSHD by segmentation outcome, pooled over the candidate rows:")
+    pooled = pd.concat([v.assign(row=k) for k, v in rows.items() if not k.startswith("before")])
+    pooled["outcome"] = np.select([pooled.n_structures < pooled.n_regimes, pooled.n_structures > pooled.n_regimes],
+                                  ["under", "over"], "exact")
+    g = pooled.groupby("outcome").agg(n=("windowed_nshd_weighted", "size"),
+                                      windowed_nshd=("windowed_nshd_weighted", "mean"),
+                                      transition_shd=("transition_shd", "mean"),
+                                      per_regime_precision=("mean_struct_precision", "mean")).round(4)
+    print(g.to_string())
+
+
 def print_block(title):
     print("\n" + "=" * 100 + f"\n{title}\n" + "=" * 100)
 
@@ -138,7 +186,13 @@ def main():
     ap.add_argument("--before", default="results/results_october_5")
     ap.add_argument("--ladder_suffix", default="",
                     help="suffix of the ladder/control rows to analyse, e.g. _v1K (detection rows are unaffected)")
+    ap.add_argument("--l3_compare", default="",
+                    help="comma-separated suffixes of L3_cold_* rows to compare head-to-head, e.g. v1J25,v1L20,v1L25")
     args = ap.parse_args()
+
+    if args.l3_compare:
+        l3_head_to_head(args.val, args.before, args.l3_compare.split(","))
+        return
 
     ids = {ln.strip() for ln in open(os.path.join(args.val, "sample_ids.txt")) if ln.strip()}
     before_w = load(os.path.join(args.before, "v1h_full_winning/results.csv"), ids)
