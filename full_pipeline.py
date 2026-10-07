@@ -306,9 +306,19 @@ def build_nonstationary_scenario(
     noise_fraction: float = 0.08,
     regime_sizes: list = None,
     schedule_version: str = "v1",
+    mechanism: str = "linear",
+    nonlinearity: float = 0.7,
+    nonlin_func: str = "tanh",
+    noise_dist: str = "laplace",
 ):
     """
     Build a multi-regime non-stationary causal time series.
+
+    mechanism / nonlinearity / nonlin_func : "linear" (the 2026-05 grid) or
+        "nonlinear", where each child is (1 - w) * linear + w * f(linear) with
+        f = nonlin_func and w = nonlinearity. noise_dist : "laplace" (the grid;
+        LiNGAM-identifiable) or "normal" (not identifiable by LiNGAM). The
+        non-default settings are the regimes CausalMorph was built for.
 
     Structural noise: Laplace at low deviation (0.05–0.10) — non-Gaussian,
     which is required for LiNGAM identifiability, but kept small so the causal
@@ -327,7 +337,9 @@ def build_nonstationary_scenario(
 
     scenario_gen = NonStationaryCausalScenario(
         p=p,
-        mode="linear",
+        mode=mechanism,
+        nonlin_func=nonlin_func,
+        nonlinearity=(nonlinearity if mechanism == "nonlinear" else 0.0),
         seed=seed,
     )
 
@@ -399,7 +411,7 @@ def build_nonstationary_scenario(
             "deviation":      deviation,
             "signal_strength": signal_strength,
             "nsamples":       regime_lengths[i],
-            "dist":           ["laplace"] * p,             # non-Gaussian → LiNGAM identifiable
+            "dist":           [noise_dist] * p,            # laplace: non-Gaussian → LiNGAM identifiable
             "regime_seed":    seed + i * 50,
         })
         if i > 0:

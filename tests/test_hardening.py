@@ -341,6 +341,61 @@ class AdjacencyConvention(unittest.TestCase):
         self.assertGreaterEqual(m["Recall"], 0.5, f"oracle-prior output: {m}")
 
 
+class BenchmarkV2Generator(unittest.TestCase):
+    """build_nonstationary_scenario exposes the mechanism and the noise family,
+    so a grid that violates LiNGAM's assumptions can be generated: Gaussian
+    noise (not identifiable by LiNGAM) and/or nonlinear mechanisms (which
+    CausalMorph's Stage I linearises)."""
+
+    @staticmethod
+    def _gen(**kw):
+        from full_pipeline import build_nonstationary_scenario
+        out = build_nonstationary_scenario(p=4, n_regimes=2, min_samples=3000, max_samples=3000,
+                                           base_pconn=0.5, change_pcts=[0.5], seed=3, noise_fraction=0.0, **kw)
+        X, true_adjs = out[0], out[6]
+        return X, true_adjs
+
+    @staticmethod
+    def _root(X, A):
+        # a variable with no parents: its marginal is the structural noise itself
+        A0 = A[0].values
+        roots = [j for j in range(A0.shape[0]) if not (A0[:, j] != 0).any()]
+        return X[:3000, roots[0]]
+
+    def test_default_noise_is_laplace(self):
+        from scipy.stats import kurtosis
+        X, A = self._gen()
+        self.assertGreater(kurtosis(self._root(X, A)), 1.5, "Laplace excess kurtosis is 3")
+
+    def test_gaussian_noise_option(self):
+        from scipy.stats import kurtosis
+        X, A = self._gen(noise_dist="normal")
+        self.assertLess(abs(kurtosis(self._root(X, A))), 0.6, "Gaussian excess kurtosis is 0")
+
+    def test_nonlinear_mechanism_option(self):
+        # A nonlinear mechanism leaves structure in the residual of a linear
+        # fit. The function matters: with the generator's weight scale (unit
+        # parents x 1.2-1.8) tanh / sigmoid / softplus are nearly linear in
+        # range (degree-5 fit gains < 0.01 R^2 over linear); cube is genuinely
+        # nonlinear (gain 0.07 at w=0.7, 0.16 at w=1.0). Odd functions are
+        # uncorrelated with x^2 by symmetry, so the test looks at x^3.
+        from full_pipeline import build_nonstationary_scenario
+        for kw, expect_nonlinear in ((dict(), False),
+                                     (dict(mechanism="nonlinear", nonlinearity=0.7, nonlin_func="cube"), True)):
+            out = build_nonstationary_scenario(p=2, n_regimes=2, min_samples=4000, max_samples=4000,
+                                               base_pconn=1.0, change_pcts=[0.5], seed=5, noise_fraction=0.0, **kw)
+            X, A0 = out[0][:4000], out[6][0].values
+            src, dst = (0, 1) if A0[0, 1] != 0 else (1, 0)
+            x, y = X[:, src], X[:, dst]
+            x = (x - x.mean()) / x.std()
+            beta = np.polyfit(x, y, 1); resid = y - np.polyval(beta, x)
+            curvature = abs(np.corrcoef(resid, x ** 3)[0, 1])
+            if expect_nonlinear:
+                self.assertGreater(curvature, 0.08, f"cube mechanism must leave curvature in the linear residual (got {curvature:.3f})")
+            else:
+                self.assertLess(curvature, 0.08, f"linear mechanism must not (got {curvature:.3f})")
+
+
 # ── 2.6 generator schedule ───────────────────────────────────────────────────
 
 class ChangeSchedule(unittest.TestCase):

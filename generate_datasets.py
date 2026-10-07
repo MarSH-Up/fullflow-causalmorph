@@ -103,6 +103,10 @@ def generate_and_save(
     noise_fraction: float,
     seed: int,
     output_dir: str,
+    mechanism: str = "linear",
+    nonlinearity: float = 0.7,
+    nonlin_func: str = "tanh",
+    noise_dist: str = "laplace",
 ) -> dict:
     """
     Generate one scenario and write its CSV files.
@@ -152,6 +156,10 @@ def generate_and_save(
         seed=seed,
         noise_fraction=noise_fraction,
         regime_sizes=computed_sizes,
+        mechanism=mechanism,
+        nonlinearity=nonlinearity,
+        nonlin_func=nonlin_func,
+        noise_dist=noise_dist,
     )
 
     # ── dat.csv: full time series ─────────────────────────────────────────────
@@ -187,6 +195,9 @@ def generate_and_save(
         "regime_sizes":      ";".join(map(str, regime_sizes)),
         "variable_names":    ";".join(variable_names),
         "min_samples_regime": MIN_REGIME_SAMPLES,   # floor used; run_experiments uses this for min_window
+        "mechanism":         mechanism,
+        "nonlinearity":      nonlinearity if mechanism == "nonlinear" else 0.0,
+        "noise_dist":        noise_dist,
     }
 
 
@@ -267,9 +278,18 @@ def run_generate(
     n_seeds: int         = 10,
     base_seed: int       = 0,
     output_dir: str      = "datasets",
+    mechanism: str       = "linear",
+    nonlinearity: float  = 0.7,
+    nonlin_func: str     = "tanh",
+    noise_dist: str      = "laplace",
+    only_ids             = None,
 ):
     """
     Generate all scenarios in the parameter grid and save to output_dir.
+
+    only_ids : optional set of scenario_ids; everything else in the grid is
+    skipped. Used to build a variant (other mechanism / noise) of exactly the
+    scenarios in a validation sample, under the same ids, in another directory.
 
     Already-existing scenario files are skipped — safe to resume after
     interruption.  Total scenarios = combinations × n_seeds.
@@ -328,6 +348,8 @@ def run_generate(
         seed           = params["seed"]
 
         sid     = make_scenario_id(p, n_regimes, samples, pconn, noise, seed)
+        if only_ids is not None and sid not in only_ids:
+            continue
         elapsed = time.time() - t0
         prefix  = f"  [{idx:>6}/{total}]  {sid}  elapsed={elapsed:.0f}s"
 
@@ -343,6 +365,8 @@ def run_generate(
                 n_regimes=n_regimes,
                 samples_regime=samples,
                 pconn=pconn,
+                mechanism=mechanism, nonlinearity=nonlinearity,
+                nonlin_func=nonlin_func, noise_dist=noise_dist,
                 noise_fraction=noise,
                 seed=seed,
                 output_dir=output_dir,
@@ -406,6 +430,14 @@ if __name__ == "__main__":
                         help="Starting seed offset (default 0)")
     parser.add_argument("--output_dir",     type=str,   default="datasets",
                         help="Output directory (default: datasets/)")
+    v2 = parser.add_argument_group("benchmark v2: assumption-violating variants")
+    v2.add_argument("--mechanism",     type=str,   default="linear", choices=["linear", "nonlinear"])
+    v2.add_argument("--nonlinearity",  type=float, default=0.7, help="weight of the nonlinear term (nonlinear only)")
+    v2.add_argument("--nonlin_func",   type=str,   default="tanh",
+                    choices=["sigmoid", "tanh", "cube", "softplus", "elu", "leaky_relu"])
+    v2.add_argument("--noise_dist",    type=str,   default="laplace", choices=["laplace", "normal", "uniform"])
+    v2.add_argument("--only_ids",      type=str,   default=None,
+                    help="file with scenario_ids (one per line); generate only those")
     args = parser.parse_args()
 
     bad = [s for s in args.samples if s < 500]
@@ -432,4 +464,9 @@ if __name__ == "__main__":
         n_seeds        = args.n_seeds,
         base_seed      = args.base_seed,
         output_dir     = args.output_dir,
+        mechanism      = args.mechanism,
+        nonlinearity   = args.nonlinearity,
+        nonlin_func    = args.nonlin_func,
+        noise_dist     = args.noise_dist,
+        only_ids       = ({ln.strip() for ln in open(args.only_ids) if ln.strip()} if args.only_ids else None),
     )
