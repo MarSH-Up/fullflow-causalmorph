@@ -221,37 +221,46 @@ def remap_learner(d, method):
     return d
 
 
-def fig_decomposition(after, c2, before, boot, label_after, out):
-    """Paired differences on the structure metrics, each against the 'after' row."""
-    comps = [("perfect segmentation\n(oracle change points − after)", c2, "ceiling"),
-             ("old configuration\n(before − after)", before, "ref"),
-             ("bootstrap 0.60 + overlap\n(with − after)", boot, "ref")]
-    comps = [(lab, d, kind) for lab, d, kind in comps if d is not None]
+def fig_decomposition(after, after_pipe, c2, before, boot, label_after, out):
+    """Mean paired differences in metric units, each row against 'after'.
+    Positive = that row is better than 'after'. Absolute differences, not
+    relative: the chosen configuration's error is small, so ratios explode."""
+    # (tick label, legend description, row, reference, colour)
+    comps = [("oracle\nsegmentation", "oracle segmentation: extraction on the true change points (headroom)", c2, after, TEAL),
+             ("old\nconfig", "old configuration: oracle seed, consensus 0.20, 10p\u00b2 deletion, v1H", before, after, ORANGE),
+             ("bootstrap\n+ overlap", "bootstrap 20 @ 0.60 + overlap 0.15, pipeline on the same windows", boot, after_pipe, MAGENTA),
+             ("CausalMorph\n+ chain", "CausalMorph transform + chain prior, vs the per-window learner on the same windows", after_pipe, after, PURPLE)]
+    comps = [c for c in comps if c[2] is not None and c[3] is not None and c[2] is not c[3]]
     if not comps:
         return
-    mets = [("windowed_nshd_weighted", "windowed nSHD"), ("transition_shd", "transition SHD"),
-            ("mean_struct_precision", "per-regime precision")]
-    fig, axes = plt.subplots(1, len(mets), figsize=(11.4, 3.8))
-    for ax, (col, mlab) in zip(axes, mets):
-        hib = col == "mean_struct_precision"
+    mets = [("mean_struct_precision", "per-regime precision", True), ("mean_struct_recall", "per-regime recall", True),
+            ("windowed_nshd_weighted", "windowed nSHD", False)]
+    fig, axes = plt.subplots(1, len(mets), figsize=(11.4, 4.0))
+    for ax, (col, mlab, hib) in zip(axes, mets):
         vals, cols = [], []
-        for lab, d, kind in comps:
-            r = paired(after, d, col, hib)          # rel > 0: that row better than 'after'
-            vals.append(r["rel"] if r else 0.0)
-            cols.append(TEAL if kind == "ceiling" else ORANGE)
+        for lab, desc, d, ref, c in comps:
+            r = paired(ref, d, col, hib)
+            delta = (r["other"] - r["ref"]) if r else 0.0
+            vals.append(delta if hib else -delta)
+            cols.append(c)
         x = np.arange(len(comps))
         ax.bar(x, vals, 0.55, color=cols)
         ax.axhline(0, color=INK, lw=1.1)
+        span = max(abs(v) for v in vals) or 0.1
         for xi, v in zip(x, vals):
-            ax.text(xi, v + (0.4 if v >= 0 else -0.9), f"{v:+.1f}%", ha="center", fontsize=9, color=INK_2, fontweight="bold")
-        ax.set_xticks(x); ax.set_xticklabels([lab for lab, _, _ in comps], fontsize=8.5)
+            ax.text(xi, v + (0.04 if v >= 0 else -0.09) * span, f"{v:+.3f}", ha="center", fontsize=9,
+                    color=INK_2, fontweight="bold")
+        ax.set_xticks(x); ax.set_xticklabels([lab for lab, *_ in comps], fontsize=8.5)
         ax.set_title(mlab, fontsize=11); ax.grid(axis="x", visible=False)
-        lo, hi = min(vals + [0]), max(vals + [0]); ax.set_ylim(lo - 2, hi + 2.5)
-    axes[0].set_ylabel("relative to 'after' (%)  —  positive = that row is better")
+        lo, hi = min(vals + [0]), max(vals + [0]); ax.set_ylim(lo - 0.18 * span, hi + 0.18 * span)
+    axes[0].set_ylabel("paired difference vs 'after'  (metric units; + = better)")
+    from matplotlib.patches import Patch
+    fig.legend(handles=[Patch(color=c, label=desc) for _, desc, _, _, c in comps],
+               loc="lower center", ncol=1, bbox_to_anchor=(0.5, -0.02), fontsize=9)
     header(fig, "What each piece is worth, on the same scenarios",
-           "Teal = headroom with perfect segmentation (the cost of imperfect detection). "
-           "Orange = the old configuration and the bootstrap/overlap extraction, both against the chosen one.")
-    fig.tight_layout()
+           "Each bar is one change against the chosen configuration, same 600 scenarios, paired. "
+           "A bar below zero is a piece that was hurting.")
+    fig.tight_layout(rect=[0, 0.16, 1, 1])
     save(fig, out, "F_decomposition.png")
 
 
@@ -281,9 +290,11 @@ def main():
     else:
         before = load(os.path.join(args.before, "v1h_full_winning/results.csv"), ids)
     det = load(os.path.join(args.val, args.det_row, "results.csv"))
-    l3 = remap_learner(load(os.path.join(args.val, args.l3_row, "results.csv")), args.after_method)
+    l3_raw = load(os.path.join(args.val, args.l3_row, "results.csv"))
+    l3 = remap_learner(l3_raw, args.after_method)
     common = set(before.index) & set(det.index) & set(l3.index)
     before, det, l3 = before[before.index.isin(common)], det[det.index.isin(common)], l3[l3.index.isin(common)]
+    l3_pipe = l3_raw[l3_raw.index.isin(common)] if args.after_method != "pipeline" else None
     print(f"scenarios in every row: {len(common)}\nwriting to {args.out}/")
 
     fig_detection_summary(before, det, args.label, args.out)
@@ -295,7 +306,7 @@ def main():
     boot = load(os.path.join(args.val, args.boot_row, "results.csv")) if args.boot_row else None
     c2 = c2[c2.index.isin(common)] if c2 is not None else None
     boot = boot[boot.index.isin(common)] if boot is not None else None
-    fig_decomposition(l3, c2, before, boot, args.label, args.out)
+    fig_decomposition(l3, l3_pipe, c2, before, boot, args.label, args.out)
 
 
 if __name__ == "__main__":
