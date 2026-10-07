@@ -9,6 +9,7 @@ import warnings
 
 import numpy as np
 import pandas as pd
+from scipy.stats import kurtosis, spearmanr
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -72,6 +73,55 @@ class Determinism(unittest.TestCase):
         self.assertEqual(list(out.columns), list(X.columns))
         self.assertEqual(out.shape, X.shape)
         self.assertTrue(np.isfinite(out.values).all())
+
+
+class StageTwo(unittest.TestCase):
+    def test_laplace_residual_not_gated_and_kept_samplewise(self):
+        from core.causalmorph_v2 import causalmorph_v2
+        X, A, e = _chain(noise="laplace")
+        out, det = causalmorph_v2(X, [0, 1, 2], _cm_adj(A), return_details=True)
+        self.assertFalse(det["V2"]["gated"]); self.assertFalse(det["V3"]["gated"])
+        r = np.corrcoef(det["V2"]["residual_before"], det["V2"]["residual_after"])[0, 1]
+        self.assertGreater(r, 0.99)          # orthogonalisation changes it only marginally
+
+    def test_gaussian_residual_gated_monotone_variance_kept(self):
+        from core.causalmorph_v2 import causalmorph_v2
+        X, A, e = _chain(noise="normal")
+        out, det = causalmorph_v2(X, [0, 1, 2], _cm_adj(A), return_details=True)
+        self.assertTrue(det["V2"]["gated"])
+        b, a = det["V2"]["residual_before"], det["V2"]["residual_after"]
+        self.assertGreater(spearmanr(b, a).correlation, 0.99)
+        self.assertAlmostEqual(a.std() / b.std(), 1.0, places=6)
+        self.assertGreater(kurtosis(a), 1.0)   # excess kurtosis: Laplace is 3, Gaussian 0
+
+    def test_gate_at_small_n(self):
+        from core.causalmorph_v2 import _stage2
+        rng = np.random.default_rng(3)
+        _, gated_l, _ = _stage2(rng.laplace(size=250), "rankmap", 0.01)
+        _, gated_g, _ = _stage2(rng.normal(size=250), "rankmap", 0.01)
+        self.assertFalse(gated_l); self.assertTrue(gated_g)
+
+    def test_rankmap_handles_ties(self):
+        from core.causalmorph_v2 import _rank_map_to_laplace
+        eps = np.repeat(np.array([-2.0, -1.0, 0.0, 1.0, 2.0]), 50)   # heavy ties
+        z = _rank_map_to_laplace(eps)
+        self.assertTrue(np.isfinite(z).all())
+        self.assertAlmostEqual(z.std(), eps.std(), places=9)
+        order = np.argsort(eps, kind="stable")
+        self.assertTrue(np.all(np.diff(z[order]) >= -1e-12))              # monotone
+
+    def test_stage2_off_is_identity(self):
+        from core.causalmorph_v2 import _stage2
+        eps = np.random.default_rng(1).normal(size=500)
+        z, gated, p = _stage2(eps, "off", 0.01)
+        np.testing.assert_array_equal(z, eps); self.assertFalse(gated); self.assertTrue(np.isnan(p))
+
+    def test_lite_equals_v2_on_laplace(self):
+        from core.causalmorph_v2 import causalmorph_v2
+        X, A, _ = _chain(noise="laplace")
+        a = causalmorph_v2(X, [0, 1, 2], _cm_adj(A), stage2="rankmap")
+        b = causalmorph_v2(X, [0, 1, 2], _cm_adj(A), stage2="off")
+        np.testing.assert_allclose(a.values, b.values)   # gate never opens on Laplace
 
 
 if __name__ == "__main__":
