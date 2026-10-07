@@ -67,6 +67,7 @@ class RegimeStructure:
     shd_metrics: Dict[str, Any] = field(default_factory=dict)
     edge_probs: Optional[np.ndarray] = None        # per-edge bootstrap frequency, [p, p]
     prior_edge_probs: Optional[np.ndarray] = None  # soft chain prior this window received
+    learner: str = "directlingam"                   # structure learner fitted after CausalMorph
 
 
 # ── SHD helpers ──────────────────────────────────────────────────────────────
@@ -107,6 +108,31 @@ def _from_lingam(B) -> np.ndarray:
 def _to_causalmorph(A: pd.DataFrame) -> pd.DataFrame:
     """A[from, to] -> the [to, from] layout CausalMorph reads parents from."""
     return A.T
+
+
+def _causalmorph_seeded(X: pd.DataFrame, causal_order, adj_truth: pd.DataFrame, seed: int) -> pd.DataFrame:
+    """
+    causalMorph with a fixed random stream. Stage II synthesises non-Gaussian
+    residuals with np.random.laplace and np.random.shuffle on numpy's global
+    RNG, unseeded, so two calls on identical data differ (measured: max
+    |diff| 7.06 on a three-variable SEM). That is why identical scenarios never
+    produced identical rows across runs. The global state is restored after
+    the call so nothing else is affected. adj_truth is A[from, to].
+    """
+    state = np.random.get_state()
+    try:
+        np.random.seed(int(seed) % (2 ** 32))
+        return causalMorph(X, causal_order=causal_order, adjacency_matrix=_to_causalmorph(adj_truth), verbose=False)
+    finally:
+        np.random.set_state(state)
+
+
+def _make_learner(learner: str, seed: int):
+    if learner == "directlingam":
+        return DirectLiNGAM()
+    if learner == "icalingam":
+        return ICALiNGAM(max_iter=3000, random_state=int(seed) % (2 ** 32))
+    raise ValueError(f"learner must be 'directlingam' or 'icalingam', got {learner!r}")
 
 
 def compute_shd(
@@ -645,6 +671,7 @@ def _bootstrap_fit(
     n_boot: int,
     threshold: float,
     seed_base: int,
+    learner: str = "directlingam",
 ):
     """
     Fit DirectLiNGAM (optionally preceded by CausalMorph) on N bootstrap
@@ -680,16 +707,13 @@ def _bootstrap_fit(
 
         if use_cm and prior_order is not None and prior_adj is not None:
             try:
-                fit_df = causalMorph(
-                    sample_df, causal_order=prior_order,
-                    adjacency_matrix=_to_causalmorph(prior_adj), verbose=False,
-                )
+                fit_df = _causalmorph_seeded(sample_df, prior_order, prior_adj, seed_base + b * 7919)
             except Exception:
                 fit_df = sample_df
         else:
             fit_df = sample_df
 
-        model = DirectLiNGAM()
+        model = _make_learner(learner, seed_base + b * 7919)
         try:
             model.fit(fit_df)
         except Exception:
@@ -705,15 +729,12 @@ def _bootstrap_fit(
         # All bootstraps failed → single fit fallback on full window.
         if use_cm and prior_order is not None and prior_adj is not None:
             try:
-                fit_df = causalMorph(
-                    window_df, causal_order=prior_order,
-                    adjacency_matrix=_to_causalmorph(prior_adj), verbose=False,
-                )
+                fit_df = _causalmorph_seeded(window_df, prior_order, prior_adj, seed_base)
             except Exception:
                 fit_df = window_df
         else:
             fit_df = window_df
-        model = DirectLiNGAM()
+        model = _make_learner(learner, seed_base)
         model.fit(fit_df)
         adj_bin = (np.abs(_from_lingam(model.adjacency_matrix_)) > 0.05).astype(float)
         np.fill_diagonal(adj_bin, 0.0)
@@ -746,9 +767,16 @@ def extract_causal_structures(
     chain_prior_edge_threshold: float = 0.10,
     chain_soft_lambda: Optional[float] = None,
     prior_density: float = 0.2,
+    learner: str = "directlingam",
+    seed: int = 0,
 ) -> List[RegimeStructure]:
     """
     Iteratively extract causal structures from every detected regime window.
+
+    learner : "directlingam" (default) or "icalingam" — the structure learner
+      fitted after CausalMorph, and the one that provides the cold prior.
+    seed : fixes CausalMorph's residual synthesis (see _causalmorph_seeded)
+      and ICA-LiNGAM's initialisation, per window and per bootstrap replica.
 
     prior_mode :
       "chain"  — (default) window 0 uses initial_adj/initial_order; each
@@ -756,6 +784,11 @@ def extract_causal_structures(
                  (causal_order, adj_matrix) as the CausalMorph prior.
       "anchor" — every window uses the same initial_adj/initial_order prior.
                  Stops cascade but hurts consensus diversity (see 2026-04-29 doc).
+      "cold"   — every window gets its own DirectLiNGAM fit as the CausalMorph
+                 prior; nothing is inherited. The chain re-applies CausalMorph's
+                 loss window after window (stationary: cold 0.88/0.85 vs the
+                 chained pipeline 0.70/0.59), so this is the fair setting for
+                 CausalMorph on its own.
 
     hybrid : bool
       If True, each window additionally runs a cold DirectLiNGAM on the raw
@@ -792,8 +825,8 @@ def extract_causal_structures(
 
     window_overlap : fraction of the previous window to prepend to each window.
     """
-    if prior_mode not in ("anchor", "chain"):
-        raise ValueError(f"prior_mode must be 'anchor' or 'chain', got {prior_mode!r}")
+    if prior_mode not in ("anchor", "chain", "cold"):
+        raise ValueError(f"prior_mode must be 'anchor', 'chain' or 'cold', got {prior_mode!r}")
     T = len(X)
     boundaries = [0] + list(detected_change_points) + [T]
     raw_windows = list(zip(boundaries[:-1], boundaries[1:]))
@@ -815,6 +848,10 @@ def extract_causal_structures(
     anchor_adj: Optional[pd.DataFrame] = initial_adj
 
     for regime_idx, (start, end) in enumerate(windows):
+        # RNG stream for this window. In cold mode every window is an
+        # independent first-window fit, so the stream must not depend on the
+        # position of the window (cold[k] == window-0 path on window k's data).
+        wseed = seed * 1_000_003 + (0 if prior_mode == "cold" else regime_idx)
         n_samples = end - start
 
         if verbose:
@@ -827,8 +864,8 @@ def extract_causal_structures(
 
         # ── Determine prior ──────────────────────────────────────────────────
         prior_source = "cold"
-        if prev_causal_order is None:
-            if initial_adj is not None and initial_order is not None:
+        if prev_causal_order is None or prior_mode == "cold":
+            if prior_mode != "cold" and initial_adj is not None and initial_order is not None:
                 if verbose:
                     print("    Using ground-truth adj/order as initial prior.")
                 causal_order_prior = initial_order
@@ -837,7 +874,7 @@ def extract_causal_structures(
             else:
                 if verbose:
                     print("    Cold start — initialising prior with DirectLiNGAM...")
-                model_cold = DirectLiNGAM()
+                model_cold = _make_learner(learner, wseed)
                 model_cold.fit(window_df)
                 causal_order_prior = model_cold.causal_order_
                 adj_cold = _from_lingam(model_cold.adjacency_matrix_)
@@ -889,7 +926,8 @@ def extract_causal_structures(
                 use_cm=True,
                 prior_order=causal_order_prior, prior_adj=adj_prior,
                 n_boot=bootstrap_n, threshold=bootstrap_threshold,
-                seed_base=regime_idx * 100003,
+                seed_base=wseed * 100003,
+                learner=learner,
             )
             if q_prior is not None:
                 # threshold the posterior, not the likelihood alone
@@ -900,12 +938,7 @@ def extract_causal_structures(
             if verbose:
                 print("    Applying CausalMorph...")
             try:
-                transformed = causalMorph(
-                    window_df,
-                    causal_order=causal_order_prior,
-                    adjacency_matrix=_to_causalmorph(adj_prior),
-                    verbose=False,
-                )
+                transformed = _causalmorph_seeded(window_df, causal_order_prior, adj_prior, wseed)
             except Exception as exc:
                 if verbose:
                     print(f"    CausalMorph raised {type(exc).__name__}: {exc}")
@@ -913,7 +946,7 @@ def extract_causal_structures(
                 transformed = window_df
             if verbose:
                 print("    Fitting DirectLiNGAM on transformed data (warm)...")
-            model_warm = DirectLiNGAM()
+            model_warm = _make_learner(learner, wseed)
             model_warm.fit(transformed)
             adj_warm = pd.DataFrame(
                 _from_lingam(model_warm.adjacency_matrix_),
@@ -931,12 +964,13 @@ def extract_causal_structures(
                     window_df, variable_names,
                     use_cm=False, prior_order=None, prior_adj=None,
                     n_boot=bootstrap_n, threshold=bootstrap_threshold,
-                    seed_base=regime_idx * 100003 + 50000,
+                    seed_base=wseed * 100003 + 50000,
+                    learner=learner,
                 )
             else:
                 if verbose:
                     print("    Fitting DirectLiNGAM on raw data (cold)...")
-                model_cold_h = DirectLiNGAM()
+                model_cold_h = _make_learner(learner, wseed + 50000)
                 model_cold_h.fit(window_df)
                 adj_cold_h = pd.DataFrame(
                     _from_lingam(model_cold_h.adjacency_matrix_),
@@ -979,6 +1013,7 @@ def extract_causal_structures(
             edge_probs=(edge_probs_warm if edge_probs_warm is not None
                         else (np.abs(adj_final.values) > chain_prior_edge_threshold).astype(float)),
             prior_edge_probs=q_prior,
+            learner=learner,
         )
         structures.append(struct)
         prev_edge_probs = struct.edge_probs

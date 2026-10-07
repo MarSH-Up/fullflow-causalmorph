@@ -369,6 +369,7 @@ def run_loaded(
     det_tolerance: int = 200,
     run_ablation: bool = True,
     legacy_postprocessing: bool = False,
+    learner: str = "directlingam",
 ) -> dict:
     """
     Run the pipeline on an already-loaded scenario. Returns a flat metrics dict.
@@ -451,6 +452,7 @@ def run_loaded(
                 chain_prior_edge_threshold=chain_prior_threshold,
                 chain_soft_lambda=chain_soft_lambda,
                 prior_density=(consensus_prior_density if consensus_prior_density is not None else 0.2),
+                learner=learner, seed=seed,
             )
             for s_ in structures:
                 tr = assign_true_regime(s_.window_start, s_.window_end, true_cps, T)
@@ -505,6 +507,8 @@ def run_loaded(
                                    "oracle" if oracle_segmentation else detector_version),
             "min_regime_len_used": min_regime_len,
             "postprocessing_mode": "legacy" if legacy_postprocessing else "merge",
+            "learner":            learner,
+            "prior_mode":         prior_mode,
             "status":             "ok",
             "error_msg":          "",
         })
@@ -827,7 +831,7 @@ if __name__ == "__main__":
                              "v1H = strict correlation-based detector, ~92%% precision vs v1G's ~52%%. "
                              "v1I = wavelet-coherence-based detector (Grinsted et al. 2004); "
                              "frequency-resolved joint-distribution change signal.")
-    parser.add_argument("--prior_mode",     type=str,   default="chain", choices=["anchor", "chain"],
+    parser.add_argument("--prior_mode",     type=str,   default="chain", choices=["anchor", "chain", "cold"],
                         help="CausalMorph prior mode (default: chain)")
     parser.add_argument("--window_overlap", type=float, default=0.15,
                         help="CausalMorph window overlap fraction (default: 0.15; was 0.0).")
@@ -879,6 +883,8 @@ if __name__ == "__main__":
                      help="Matching tolerance (samples) for detection precision/recall")
     exp.add_argument("--no_ablation",          action="store_true",
                      help="Skip the DirectLiNGAM / ICA-LiNGAM per-window baselines")
+    exp.add_argument("--learner",              type=str, default="directlingam", choices=["directlingam", "icalingam"],
+                     help="structure learner fitted after CausalMorph (and used for the cold prior)")
     exp.add_argument("--legacy_postprocessing", action="store_true",
                      help="Pre-2026-10-06 deletion rule max(min_samples/2, 10p^2), scored before extraction (old 'before')")
     args = parser.parse_args()
@@ -908,4 +914,5 @@ if __name__ == "__main__":
         adaptive_null=args.adaptive_null, det_tolerance=args.det_tolerance,
         run_ablation=not args.no_ablation,
         legacy_postprocessing=args.legacy_postprocessing,
+        learner=args.learner,
     )

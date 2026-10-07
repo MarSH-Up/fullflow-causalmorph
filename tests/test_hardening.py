@@ -593,6 +593,62 @@ class TransitionF1(unittest.TestCase):
         self.assertEqual(transition_f1([s0, s1], [A, A], [500], 1000, 4), 1.0)
 
 
+class ColdPriorMode(unittest.TestCase):
+    """prior_mode="cold": every window gets its own DirectLiNGAM prior for
+    CausalMorph, nothing is inherited from the previous window. The chain is
+    what costs the pipeline most (stationary: cold 0.88/0.85 vs chained
+    pipeline 0.70/0.59), so this is the fair configuration for CausalMorph."""
+
+    def test_every_window_is_cold_and_inherits_nothing(self):
+        from full_pipeline import extract_causal_structures
+        X, names, true_cps, *_ = _tiny_scenario()
+        structs = extract_causal_structures(X, true_cps, names, verbose=False, bootstrap_n=0, prior_mode="cold")
+        self.assertEqual(len(structs), 2)
+        self.assertTrue(all(s.prior_source == "cold" for s in structs), [s.prior_source for s in structs])
+        self.assertTrue(all(not s.used_prior for s in structs))
+
+    def test_cold_mode_matches_window0_cold_path_on_each_window(self):
+        # window 1 under "cold" must equal what the window-0 cold path gives on
+        # window 1's data alone — i.e. no dependence on window 0
+        from full_pipeline import extract_causal_structures
+        X, names, true_cps, *_ = _tiny_scenario()
+        cold = extract_causal_structures(X, true_cps, names, verbose=False, bootstrap_n=0, prior_mode="cold",
+                                         window_overlap=0.0)
+        alone = extract_causal_structures(X[true_cps[0]:], [], names, verbose=False, bootstrap_n=0,
+                                          window_overlap=0.0)
+        np.testing.assert_array_equal(cold[1].adjacency_matrix.values, alone[0].adjacency_matrix.values)
+
+    def test_cli_accepts_cold(self):
+        import subprocess, sys
+        out = subprocess.run([sys.executable, "run_experiments.py", "--help"], capture_output=True, text=True, cwd=ROOT).stdout
+        self.assertIn("cold", out.split("--prior_mode")[1][:80])
+
+
+class LearnerOption(unittest.TestCase):
+    """learner="icalingam": ICA-LiNGAM fits the CausalMorph-transformed window
+    (and provides the cold prior) instead of DirectLiNGAM."""
+
+    def test_learner_is_recorded_and_reproducible(self):
+        from full_pipeline import extract_causal_structures
+        X, names, true_cps, *_ = _tiny_scenario()
+        a = extract_causal_structures(X, true_cps, names, verbose=False, bootstrap_n=0, prior_mode="cold",
+                                      window_overlap=0.0, learner="icalingam", seed=3)
+        b = extract_causal_structures(X, true_cps, names, verbose=False, bootstrap_n=0, prior_mode="cold",
+                                      window_overlap=0.0, learner="icalingam", seed=3)
+        self.assertTrue(all(s.learner == "icalingam" for s in a))
+        np.testing.assert_array_equal(a[0].adjacency_matrix.values, b[0].adjacency_matrix.values)
+
+    def test_learner_changes_the_fit(self):
+        from full_pipeline import extract_causal_structures
+        X, names, A = AdjacencyConvention._chain_sem()
+        d = extract_causal_structures(X, [], names, verbose=False, bootstrap_n=0, prior_mode="cold")
+        i = extract_causal_structures(X, [], names, verbose=False, bootstrap_n=0, prior_mode="cold", learner="icalingam", seed=1)
+        self.assertEqual(d[0].learner, "directlingam")
+        # both must still recover the chain in the truth convention
+        from full_pipeline import compute_shd
+        self.assertGreaterEqual(compute_shd(i[0].adjacency_matrix, A)["Recall"], 0.5)
+
+
 # ── 2.5 soft chain prior ─────────────────────────────────────────────────────
 
 class SoftChainPrior(unittest.TestCase):
