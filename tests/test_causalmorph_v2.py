@@ -124,5 +124,52 @@ class StageTwo(unittest.TestCase):
         np.testing.assert_allclose(a.values, b.values)   # gate never opens on Laplace
 
 
+def _partial_signal(a, b, given):
+    """corr of the residuals of a and b after regressing each on `given`."""
+    def resid(v):
+        c = np.polyfit(given, v, 1); return v - np.polyval(c, given)
+    return np.corrcoef(resid(a), resid(b))[0, 1]
+
+
+class StageThreeAndFallbacks(unittest.TestCase):
+    def test_final_residual_orthogonal_to_parents(self):
+        from core.causalmorph_v2 import causalmorph_v2
+        X, A, _ = _chain(noise="normal")
+        out, det = causalmorph_v2(X, [0, 1, 2], _cm_adj(A), return_details=True)
+        # V2's parent is V1 (untouched root); V3's parent is the transformed V2
+        self.assertLess(abs(np.corrcoef(det["V2"]["residual_after"], out["V1"])[0, 1]), 1e-8)
+        self.assertLess(abs(np.corrcoef(det["V3"]["residual_after"], out["V2"])[0, 1]), 1e-8)
+
+    def test_chain_probe_direct_edge_survives(self):
+        # v1 drops the V2->V3 partial signal given V1 from 0.695 to 0.016 on this chain
+        from core.causalmorph_v2 import causalmorph_v2
+        X, A, _ = _chain(n=5000, seed=0, noise="laplace")
+        out = causalmorph_v2(X, [0, 1, 2], _cm_adj(A))
+        self.assertGreater(_partial_signal(out["V2"].values, out["V3"].values, out["V1"].values), 0.6)
+
+    def test_chain_probe_survives_when_gated(self):
+        from core.causalmorph_v2 import causalmorph_v2
+        X, A, _ = _chain(n=5000, seed=0, noise="normal")
+        out, det = causalmorph_v2(X, [0, 1, 2], _cm_adj(A), return_details=True)
+        self.assertTrue(det["V2"]["gated"])
+        self.assertGreater(_partial_signal(out["V2"].values, out["V3"].values, out["V1"].values), 0.5)
+
+    def test_tiny_window_falls_back(self):
+        from core.causalmorph_v2 import causalmorph_v2
+        X, A, _ = _chain(n=10)
+        out, det = causalmorph_v2(X, [0, 1, 2], _cm_adj(A), return_details=True)
+        np.testing.assert_array_equal(out.values, X.values)
+        self.assertEqual(det["V2"]["skipped"], "too_few_rows")
+
+    def test_constant_parent_skipped(self):
+        from core.causalmorph_v2 import causalmorph_v2
+        X, A, _ = _chain(noise="normal")
+        X = X.copy(); X["V1"] = 1.0                    # constant root
+        out, det = causalmorph_v2(X, [0, 1, 2], _cm_adj(A), return_details=True)
+        np.testing.assert_array_equal(out["V2"].values, X["V2"].values)
+        self.assertEqual(det["V2"]["skipped"], "constant_parent")
+        self.assertIsNone(det["V3"]["skipped"])        # V3's parent V2 is fine
+
+
 if __name__ == "__main__":
     unittest.main()
