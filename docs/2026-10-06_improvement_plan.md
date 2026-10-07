@@ -783,3 +783,35 @@ signal.
 Final rows for the figures: `run_final_rows.sh` — v1L $\gamma$2.5 windows, no
 bootstrap, with the per-window learners (LB), the oracle-segmentation
 ceiling (C2) and the whole-series control with every learner (C3).
+
+---
+
+## 12. Extraction sweep: overlap alone and bootstrap thresholds (2026-10-07)
+
+All rows: v1L $\gamma$2.5 windows, cold start, consensus 0.5, corrected
+convention. Reference: no bootstrap, no overlap (`L2_cold_v1L25_v2`).
+Relative change vs the reference, positive = better.
+
+| | overlap 0.15 alone | boot @0.30 + ov | boot @0.40 + ov | boot @0.50 + ov | boot @0.60 + ov |
+|---|---|---|---|---|---|
+| per-regime precision | −15.8% | −21.1% | −18.0% | −15.2% | −11.9% |
+| per-regime recall | −9.4% | −4.7% | −7.8% | −10.3% | −11.5% |
+| windowed nSHD | −23.4% | −36.4% | −28.8% | −23.2% | −17.4% |
+| transition $F_1$ | −31.9% | −34.5% | −32.8% | −32.8% | — |
+| consensus $F_1$ | −13.9% | −11.3% | −12.7% | −14.6% | −14.8% |
+
+**Overlap alone hurts** on every metric. It prepends 15% of the previous
+window to each window, i.e. samples that belong to the previous regime by
+construction; in the reversed orientation of §8 that smoothed the chain, in
+the correct one it contaminates every fit.
+
+**No bootstrap threshold recovers it.** Lowering the threshold trades
+precision for recall monotonically (0.30: recall −4.7%, precision −21%);
+nothing approaches the plain per-window fit. A clean bootstrap-without-
+overlap row (`X_boot_t060_noov_v1L25_v2`) is queued to separate the two for
+the figure; the ranking above does not depend on it.
+
+**Extraction chosen for the figures:** v1L $\gamma$2.5 windows, cold start,
+no bootstrap, no overlap, consensus 0.5 — and, per §11, the per-window
+learner without CausalMorph as the "after" structure, with the pipeline's
+own columns shown alongside.
