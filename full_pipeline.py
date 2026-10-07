@@ -70,7 +70,7 @@ class RegimeStructure:
     prior_edge_probs: Optional[np.ndarray] = None  # soft chain prior this window received
     learner: str = "directlingam"                   # structure learner fitted after CausalMorph
     transform: str = "v1"                           # preconditioner: v1 | v2 | lite | none
-    transform_failed: bool = False                  # transform raised; raw window was used instead
+    transform_failed: bool = False                  # transform raised; raw window was used instead (bootstrap: any replica)
 
 
 # ── SHD helpers ──────────────────────────────────────────────────────────────
@@ -721,7 +721,8 @@ def _bootstrap_fit(
 
     n_failed : int
         Number of fits (replicas, or the single-fit fallback) whose transform
-        raised and fell back to the raw data.
+        raised and fell back to the raw data. The caller flags the window
+        (transform_failed) if any replica failed.
 
     Falls back to a single non-bootstrap fit if every bootstrap raises.
     """
