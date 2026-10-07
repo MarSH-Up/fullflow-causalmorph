@@ -724,3 +724,62 @@ Detector choice: second-order next to extraction. Among the three, v1L
 $\gamma$2.5 is marginally best on structure and has 9% over-segmentation
 versus 29% for v1J; it is the provisional choice for the ladder, to be
 confirmed by the no-bootstrap rows.
+
+---
+
+## 11. CausalMorph on data that already satisfies LiNGAM's assumptions
+
+Phase 2 isolated the two mechanisms at equal windows (600-scenario sample,
+corrected convention, cold start):
+
+- **Bootstrap 20 @ 0.60 + overlap 0.15, same v1H windows:** −6.8% per-regime
+  precision, −8.7% recall, −10.1% nSHD, −12.0% consensus $F_1$ vs no bootstrap.
+- **Detector at no bootstrap:** v1J / v1L vs v1H: +5.7% / +3.9% precision,
+  recall flat, windowed nSHD +2.9% / +1.5%; v1J ≈ v1L on structure, v1L with
+  9% over-segmentation vs 29%. **v1L $\gamma$2.5 chosen.**
+- **Baselines on the pipeline's own v1H windows, correctly scored**
+  (`L3_cold_v2`): pipeline $F_1$ 0.566 / nSHD 0.169; DirectLiNGAM per window
+  0.743 / 0.147; **ICA-LiNGAM per window 0.848 / 0.077.**
+
+To tell design from a residual bug, one stationary experiment (linear SEM,
+Laplace noise, $p=6$, $n=1500$, density 0.3, 8 seeds):
+
+| | precision | recall |
+|---|---|---|
+| DirectLiNGAM raw | 1.000 | 1.000 |
+| ICA-LiNGAM raw | 1.000 | 1.000 |
+| DirectLiNGAM ∘ CausalMorph, prior = **truth** | 0.858 | 0.835 |
+| DirectLiNGAM ∘ CausalMorph, prior = DirectLiNGAM estimate (cold path) | 0.876 | 0.853 |
+| DirectLiNGAM ∘ CausalMorph, prior = truth **untransposed** (the old bug) | 0.030 | 0.036 |
+| DirectLiNGAM ∘ CausalMorph, prior = empty | 1.000 | 1.000 |
+
+With the true graph as prior, CausalMorph's transform turns a perfect
+recovery into ~85%; with an empty prior it is the identity. The chain prior
+then re-applies this loss window after window — that is the whole gap
+between L2 (recall 0.59) and DirectLiNGAM on the same windows (0.84).
+
+This is consistent with what CausalMorph is: a preconditioner for data that
+**violate** LiNGAM's assumptions (KBS 2026: nonlinear mechanisms, Gaussian-
+leaning noise). This grid is linear with Laplace innovations — LiNGAM's own
+model — where a preconditioner has nothing to fix and can only remove
+signal.
+
+### Consequences
+
+1. On this benchmark the honest extraction is **LiNGAM per window without
+   CausalMorph** (ICA-LiNGAM best). The pipeline's defensible contribution is
+   the segmentation — detection recall 0.48 → 0.87 at precision 0.91 (v1L)
+   — and the per-window / consensus machinery around it.
+2. CausalMorph's contribution needs a grid that violates the assumptions it
+   was built for: nonlinear mechanisms and/or Gaussian noise, as in the KBS
+   evaluation. That is a benchmark-design decision for the advisors, not a
+   tuning problem.
+3. The chain prior, as implemented (CausalMorph imposes the previous window's
+   orientation), is harmful on this grid; whether it helps on an
+   assumption-violating grid is open.
+4. The October "99.4% / 99.99% win-rates against the baselines" invert: the
+   baselines win.
+
+Final rows for the figures: `run_final_rows.sh` — v1L $\gamma$2.5 windows, no
+bootstrap, with the per-window learners (LB), the oracle-segmentation
+ceiling (C2) and the whole-series control with every learner (C3).
