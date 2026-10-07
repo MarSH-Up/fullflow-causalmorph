@@ -655,3 +655,72 @@ figure. It was always better than it reported.
   output against `nx`-generated truth should be audited for the same
   comparison. The KBS paper's evaluation code is a separate codebase and is
   not covered by this audit.
+
+---
+
+## 9. `transition_shd` rewards missing transitions (found 2026-10-06)
+
+`transition_shd` aligns each true regime to its best-overlap window and
+charges $|\delta_{\text{true}} \oplus \delta_{\text{pred}}| / p(p-1)$ per
+transition. When a transition is **missed**, regimes $k$ and $k{+}1$ align to
+the same window, $\delta_{\text{pred}} = \emptyset$, and the charge is
+$|\delta_{\text{true}}|$ — one to four edges on this grid. When it is
+**detected**, $\delta_{\text{pred}}$ is the symmetric difference of two noisy
+fits and carries both fits' estimation noise. Measured on the 600-scenario
+sample, by segmentation outcome:
+
+| row | exact | over | **under** |
+|---|---|---|---|
+| C0 (old config, corrected) | 0.217 | 0.124 | **0.114** |
+| L2 (cold, no bootstrap) | 0.162 | 0.126 | **0.099** |
+| L3 v1J | 0.193 | 0.177 | **0.085** |
+
+Under-segmentation scores best in every configuration: the metric is
+minimised by predicting no change. `windowed_nshd_weighted` has the opposite
+blind spot — a regime split into two windows keeps only the larger overlap,
+so spurious change points cost nothing beyond shorter fits.
+
+**Replacement: `transition_f1`** — $\delta_{\text{true}}$ and
+$\delta_{\text{pred}}$ as edge sets, $F_1$ per transition, averaged. A missed
+transition scores 0; a learned transition with one spurious change scores
+$2/3$; no true change and none predicted scores 1. Added to the pipeline and
+both baseline arms (`run_experiments.py`), tested first. Rows produced before
+2a6048e do not carry it; the final ladder will. `transition_shd` stays in the
+CSV for continuity and should not be used to rank configurations.
+
+---
+
+## 10. Under the corrected convention, bootstrap + overlap hurt (600-scenario sample)
+
+All rows cold start, consensus 0.5, merge-for-extraction, corrected
+convention. Reference: L2 = v1H windows, **no bootstrap, no overlap**.
+
+| paired vs L2 | C0 (old config, corrected) | L3 v1J $\gamma$2.5 | L3 v1L $\gamma$2.0 | L3 v1L $\gamma$2.5 |
+|---|---|---|---|---|
+| per-regime precision | −11.7% | −9.9% | −8.4% | −8.5% |
+| per-regime recall | −8.8% | −15.9% | −13.0% | −12.2% |
+| mean nSHD | −20.3% | −26.5% | −23.4% | −22.1% |
+| windowed nSHD | −19.0% | −18.2% | −16.2% | −15.7% |
+| consensus $F_1$ | −0.7% | −19.0% | −15.5% | −14.4% |
+| dynamic score | −20.3% | +25.5% | +31.2% | +36.1% |
+
+L3 rows = bootstrap 20 at threshold 0.60 + overlap 0.15 on the new detectors'
+windows. They lose to L2 on every structure metric and win only dynamic
+score, which carries detection $F_1$. On **exactly segmented** scenarios the
+gap persists (windowed nSHD 0.140 for L2 vs 0.183–0.190 for the L3 rows), so
+it is the extraction, not the windows. The three detectors differ by at most
+two points among themselves, ordered by less over-segmentation.
+
+Reading: in the reversed orientation of §8, the bootstrap's 60% consensus
+suppressed noisy reversed edges and looked like a +9.4% precision gain. In
+the correct orientation the same threshold cuts true edges (recall −12 to
+−16%). The "winning configuration" of the report was tuned on the reversed
+problem. `run_bootstrap_sweep.sh` separates overlap from bootstrap and
+lowers the threshold (0.30 / 0.40 / 0.50) on v1L $\gamma$2.5 windows; phase 2
+adds L3 on v1H windows (bootstrap at equal windows) and L2 on v1J / v1L
+windows (detector at no bootstrap).
+
+Detector choice: second-order next to extraction. Among the three, v1L
+$\gamma$2.5 is marginally best on structure and has 9% over-segmentation
+versus 29% for v1J; it is the provisional choice for the ladder, to be
+confirmed by the no-bootstrap rows.
