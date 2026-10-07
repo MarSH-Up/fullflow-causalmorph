@@ -204,12 +204,29 @@ def fig_consensus_windows(before, after, label_after, out):
     save(fig, out, "E_consensus_by_windows.png")
 
 
-def fig_decomposition(l3, c1, c2, l2, label_after, out):
-    """Paired differences on the structure-over-time metrics."""
-    comps = [("ground-truth seed of window 0\n(C1 − L3)", c1, True),
-             ("perfect segmentation\n(C2 − L3)", c2, True),
-             ("bootstrap + overlap\n(L3 − L2)", l2, False)]
-    comps = [(lab, d, flip) for lab, d, flip in comps if d is not None]
+def remap_learner(d, method):
+    """Expose a per-window learner's ablation columns under the pipeline's names."""
+    if d is None or method == "pipeline":
+        return d
+    d = d.copy()
+    m = {f"{method}_mean_precision": "mean_struct_precision", f"{method}_mean_recall": "mean_struct_recall",
+         f"{method}_mean_f1": "mean_struct_f1", f"{method}_mean_norm_shd": "mean_norm_shd",
+         f"{method}_cons_precision": "consensus_precision", f"{method}_cons_recall": "consensus_recall",
+         f"{method}_cons_f1": "consensus_f1", f"{method}_cons_norm_shd": "consensus_norm_shd",
+         f"{method}_windowed_nshd_weighted": "windowed_nshd_weighted", f"{method}_transition_shd": "transition_shd",
+         f"{method}_transition_f1": "transition_f1", f"{method}_dynamic_score": "dynamic_score"}
+    for src, dst in m.items():
+        if src in d:
+            d[dst] = d[src]
+    return d
+
+
+def fig_decomposition(after, c2, before, boot, label_after, out):
+    """Paired differences on the structure metrics, each against the 'after' row."""
+    comps = [("perfect segmentation\n(oracle change points − after)", c2, "ceiling"),
+             ("old configuration\n(before − after)", before, "ref"),
+             ("bootstrap 0.60 + overlap\n(with − after)", boot, "ref")]
+    comps = [(lab, d, kind) for lab, d, kind in comps if d is not None]
     if not comps:
         return
     mets = [("windowed_nshd_weighted", "windowed nSHD"), ("transition_shd", "transition SHD"),
@@ -218,10 +235,10 @@ def fig_decomposition(l3, c1, c2, l2, label_after, out):
     for ax, (col, mlab) in zip(axes, mets):
         hib = col == "mean_struct_precision"
         vals, cols = [], []
-        for lab, d, flip in comps:
-            r = paired(l3, d, col, hib) if flip else paired(d, l3, col, hib)
+        for lab, d, kind in comps:
+            r = paired(after, d, col, hib)          # rel > 0: that row better than 'after'
             vals.append(r["rel"] if r else 0.0)
-            cols.append(TEAL if flip else BLUE)
+            cols.append(TEAL if kind == "ceiling" else ORANGE)
         x = np.arange(len(comps))
         ax.bar(x, vals, 0.55, color=cols)
         ax.axhline(0, color=INK, lw=1.1)
@@ -230,10 +247,10 @@ def fig_decomposition(l3, c1, c2, l2, label_after, out):
         ax.set_xticks(x); ax.set_xticklabels([lab for lab, _, _ in comps], fontsize=8.5)
         ax.set_title(mlab, fontsize=11); ax.grid(axis="x", visible=False)
         lo, hi = min(vals + [0]), max(vals + [0]); ax.set_ylim(lo - 2, hi + 2.5)
-    axes[0].set_ylabel("relative improvement over the pipeline (%)")
+    axes[0].set_ylabel("relative to 'after' (%)  —  positive = that row is better")
     header(fig, "What each piece is worth, on the same scenarios",
-           "Teal = how much better the pipeline would do with an oracle (the size of the leak the old results "
-           "carried; the cost of imperfect detection). Blue = what bootstrap + overlap add, cold start.")
+           "Teal = headroom with perfect segmentation (the cost of imperfect detection). "
+           "Orange = the old configuration and the bootstrap/overlap extraction, both against the chosen one.")
     fig.tight_layout()
     save(fig, out, "F_decomposition.png")
 
@@ -249,6 +266,10 @@ def main():
     ap.add_argument("--det_row", required=True, help="detection-only row for the after detector, e.g. D_v1L_g2.5")
     ap.add_argument("--l3_row", required=True, help="L3 row for the after pipeline, e.g. L3_cold_v1L25")
     ap.add_argument("--label", default="After")
+    ap.add_argument("--after_method", default="pipeline", choices=["pipeline", "directlingam", "icalingam"],
+                    help="which learner's per-window columns to show as 'after' structure (the row must have ablation on)")
+    ap.add_argument("--boot_row", default=None,
+                    help="row with bootstrap 0.60 + overlap on the same windows, for the decomposition panel")
     ap.add_argument("--c1_row", default=None); ap.add_argument("--c2_row", default=None); ap.add_argument("--l2_row", default=None)
     ap.add_argument("--out", default="results/hardening_validation/figures")
     args = ap.parse_args()
@@ -260,7 +281,7 @@ def main():
     else:
         before = load(os.path.join(args.before, "v1h_full_winning/results.csv"), ids)
     det = load(os.path.join(args.val, args.det_row, "results.csv"))
-    l3 = load(os.path.join(args.val, args.l3_row, "results.csv"))
+    l3 = remap_learner(load(os.path.join(args.val, args.l3_row, "results.csv")), args.after_method)
     common = set(before.index) & set(det.index) & set(l3.index)
     before, det, l3 = before[before.index.isin(common)], det[det.index.isin(common)], l3[l3.index.isin(common)]
     print(f"scenarios in every row: {len(common)}\nwriting to {args.out}/")
@@ -270,10 +291,11 @@ def main():
     fig_segmentation_outcome(before, l3, args.label, args.out)
     fig_structure(before, l3, args.label, args.out)
     fig_consensus_windows(before, l3, args.label, args.out)
-    opt = {k: (load(os.path.join(args.val, v, "results.csv")) if v else None)
-           for k, v in (("c1", args.c1_row), ("c2", args.c2_row), ("l2", args.l2_row))}
-    opt = {k: (d[d.index.isin(common)] if d is not None else None) for k, d in opt.items()}
-    fig_decomposition(l3, opt["c1"], opt["c2"], opt["l2"], args.label, args.out)
+    c2 = remap_learner(load(os.path.join(args.val, args.c2_row, "results.csv")), args.after_method) if args.c2_row else None
+    boot = load(os.path.join(args.val, args.boot_row, "results.csv")) if args.boot_row else None
+    c2 = c2[c2.index.isin(common)] if c2 is not None else None
+    boot = boot[boot.index.isin(common)] if boot is not None else None
+    fig_decomposition(l3, c2, before, boot, args.label, args.out)
 
 
 if __name__ == "__main__":
