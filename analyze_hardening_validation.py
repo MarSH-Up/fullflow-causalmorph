@@ -133,14 +133,17 @@ def benchmark_v2_summary(val):
     """The 2x2: mechanism {linear, nonlinear} x noise {laplace, normal}. Per
     cell, detection (D row) and, on the same v1L windows (LB row), the pipeline
     with CausalMorph against DirectLiNGAM and ICA-LiNGAM per window."""
-    cells = [("linear / laplace  (the grid)", "D_v1L_g2.5", "LB_v1L25_v2"),
-             ("nonlinear / laplace", "D_v1L_nonlin_laplace", "LB_nonlin_laplace"),
-             ("linear / normal", "D_v1L_lin_normal", "LB_lin_normal"),
-             ("nonlinear / normal", "D_v1L_nonlin_normal", "LB_nonlin_normal")]
+    cells = [("linear / laplace  (the grid)", "D_v1L_g2.5", "LB_v1L25_v2", "lin_laplace"),
+             ("nonlinear / laplace", "D_v1L_nonlin_laplace", "LB_nonlin_laplace", "nonlin_laplace"),
+             ("linear / normal", "D_v1L_lin_normal", "LB_lin_normal", "lin_normal"),
+             ("nonlinear / normal", "D_v1L_nonlin_normal", "LB_nonlin_normal", "nonlin_normal")]
     learners = [("pipeline (CausalMorph + chain)", "mean_struct_"), ("DirectLiNGAM / window", "directlingam_mean_"),
                 ("ICA-LiNGAM / window", "icalingam_mean_")]
+    # pipeline variants run as separate rows on the same windows (run_cold_learner_rows.sh)
+    variants = [("CausalMorph + DL, cold (no chain)", "P_cold_"), ("CausalMorph + ICA, cold (no chain)", "P_cold_ica_"),
+                ("CausalMorph + ICA, chain prior", "P_chain_ica_")]
     print_block("BENCHMARK V2  (same 600 scenario ids per cell; cold start, no bootstrap; corrected convention)")
-    for label, dname, lbname in cells:
+    for label, dname, lbname, cell in cells:
         d = load(os.path.join(val, dname, "results.csv")); lb = load(os.path.join(val, lbname, "results.csv"))
         print(f"\n  {label}")
         if d is not None and len(d):
@@ -157,11 +160,25 @@ def benchmark_v2_summary(val):
             tf = lb["transition_f1" if pre == "mean_struct_" else pre.replace("mean_", "") + "transition_f1"]
             print(f"    {lname:<32}{lb[pre+'precision'].mean():>7.3f}{lb[pre+'recall'].mean():>7.3f}{lb[pre+'f1'].mean():>7.3f}"
                   f"{nshd.mean():>8.3f}{wn.mean():>8.3f}{tf.mean():>7.3f}")
-        # paired: pipeline vs each learner on F1
+        extra = []
+        for vname, vpre in variants:
+            v = load(os.path.join(val, vpre + cell, "results.csv"))
+            if v is None or not len(v):
+                continue
+            v = v[v.index.isin(lb.index)]
+            print(f"    {vname:<32}{v.mean_struct_precision.mean():>7.3f}{v.mean_struct_recall.mean():>7.3f}{v.mean_struct_f1.mean():>7.3f}"
+                  f"{v.mean_norm_shd.mean():>8.3f}{v.windowed_nshd_weighted.mean():>8.3f}{v.transition_f1.mean():>7.3f}")
+            extra.append((vname, v))
+        # paired on F1: pipeline vs each learner; each variant vs pipeline and vs ICA / window
+        def wl(a, b):
+            m = a.notna() & b.notna(); return int((a[m] > b[m]).sum()), int((a[m] < b[m]).sum())
         for lname, pre in learners[1:]:
-            a, b = lb["mean_struct_f1"], lb[pre + "f1"]; m = a.notna() & b.notna()
-            w, l = int((a[m] > b[m]).sum()), int((a[m] < b[m]).sum())
+            w, l = wl(lb["mean_struct_f1"], lb[pre + "f1"])
             print(f"    pipeline vs {lname.split(' /')[0]:<14} F1 win/loss {w}/{l}")
+        for vname, v in extra:
+            f = v.mean_struct_f1.reindex(lb.index)
+            w1, l1 = wl(f, lb["mean_struct_f1"]); w2, l2 = wl(f, lb["icalingam_mean_f1"])
+            print(f"    {vname:<34} vs pipeline {w1}/{l1}   vs ICA/window {w2}/{l2}   (F1 win/loss)")
 
 
 def micro_prf(d, tol=200):

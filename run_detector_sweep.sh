@@ -20,6 +20,8 @@ WORKERS="${WORKERS:-12}"
 DETECTOR="${DETECTOR:-v1J}"            # v1J (Fisher) | v1K (studentised) | v1L (refined scale)
 GAMMAS="${GAMMAS:-2.5 3.0 3.5 4.0}"
 FIXEDW_GAMMA="${FIXEDW_GAMMA:-}"      # set to run v1J + fixed W at that gamma
+DATASET_DIR="${DATASET_DIR:-datasets}"   # e.g. datasets_v2_nonlin_laplace
+CELL="${CELL:-}"                        # row-name suffix, e.g. _nonlin_laplace
 OUT="results/hardening_validation"
 IDS="$OUT/sample_ids.txt"
 LOG="$OUT/logs"; mkdir -p "$LOG"
@@ -27,7 +29,7 @@ LOG="$OUT/logs"; mkdir -p "$LOG"
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
        VECLIB_MAXIMUM_THREADS=1 NUMEXPR_NUM_THREADS=1 PYTHONHASHSEED=0
 
-COMMON="--dataset_dir datasets --detector $DETECTOR --no-hybrid --chain_prior_threshold 0.05 \
+COMMON="--dataset_dir $DATASET_DIR --detector $DETECTOR --no-hybrid --chain_prior_threshold 0.05 \
         --bootstrap_n 0 --window_overlap 0.0 --no_ablation \
         --workers $WORKERS --batch_size 10 --resume --scenario_ids_file $IDS"
 
@@ -42,9 +44,9 @@ run_row () {
 }
 
 for g in $GAMMAS; do
-  run_row "D_${DETECTOR}_g${g}" --corr_gamma "$g"
+  run_row "D_${DETECTOR}_g${g}${CELL}" --corr_gamma "$g"
 done
 if [ -n "$FIXEDW_GAMMA" ]; then
-  run_row "D_${DETECTOR}_g${FIXEDW_GAMMA}_fixedW500" --corr_gamma "$FIXEDW_GAMMA" --fixed_min_regime_len 500
+  run_row "D_${DETECTOR}_g${FIXEDW_GAMMA}${CELL}_fixedW500" --corr_gamma "$FIXEDW_GAMMA" --fixed_min_regime_len 500
 fi
 echo "SWEEP DONE"

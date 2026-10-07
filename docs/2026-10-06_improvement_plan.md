@@ -815,3 +815,84 @@ the figure; the ranking above does not depend on it.
 no bootstrap, no overlap, consensus 0.5 — and, per §11, the per-window
 learner without CausalMorph as the "after" structure, with the pipeline's
 own columns shown alongside.
+
+## 13. Benchmark v2: the regimes CausalMorph was built for (2026-10-07)
+
+Same 600 scenario ids as §7–§12 (same $p$, $R$, samples, density, seed),
+regenerated under three assumption-violating settings, by
+`run_benchmark_v2.sh`. Mechanism `nonlinear` means
+$X_i = 0.3\,(X_{pa}w) + 0.7\,(X_{pa}w)^3 + \varepsilon_i$ (the cube; `tanh`,
+`sigmoid` and `softplus` are linear to first order at the grid's signal
+scale and reproduce the linear cell). Everything else as in §12: v1L
+$\gamma$2.5 windows, cold start, no bootstrap, no overlap, consensus 0.5,
+corrected convention. Per cell, the three learners see the **same windows**.
+
+| cell | detection P / R | pipeline (CM + chain) F1 | DirectLiNGAM / window F1 | ICA-LiNGAM / window F1 | pipeline vs ICA, F1 win/loss |
+|---|---|---|---|---|---|
+| linear / Laplace (the grid) | 0.912 / 0.867 | 0.621 | 0.902 | **0.920** | 8 / 555 |
+| nonlinear / Laplace | 0.398 / 0.626 | 0.409 | 0.631 | **0.810** | 14 / 563 |
+| linear / Gaussian | 0.939 / 0.902 | 0.303 | 0.427 | **0.867** | 4 / 584 |
+| nonlinear / Gaussian | 0.661 / 0.633 | 0.248 | 0.374 | **0.737** | 27 / 566 |
+
+Three readings.
+
+1. **Gaussian noise does not break ICA-LiNGAM on this generator** (0.867 on
+   the linear/Gaussian cell). Non-identifiability of LiNGAM is a statement
+   about the population model with *all* noises Gaussian; the generator's
+   normalised weights $w/\|w\|_2 \in [1,3]^k$ plus the deviation-scaled noise
+   leave enough asymmetry in the finite sample for ICA to orient edges.
+   DirectLiNGAM, which relies on pairwise independence measures, does
+   degrade (0.427). The cell where CausalMorph's premise holds most clearly
+   is therefore the one where the comparison learner is least hurt.
+2. **The pipeline is below both per-window learners in every cell**, and
+   the gap is largest exactly where CausalMorph is supposed to help
+   (linear/Gaussian: 0.303 vs 0.867, 4 wins in 588 pairs). On the
+   assumption-satisfying grid, §11 attributed the loss to CausalMorph
+   removing recoverable structure; the v2 cells show the loss is not
+   specific to that regime.
+3. **Detection, not extraction, is the binding constraint on the nonlinear
+   cells.** v1L's precision falls to 0.40 on nonlinear/Laplace: the cube
+   produces heavy-tailed marginals and the Fisher-standardised statistic's
+   Gaussian null is miscalibrated. A per-cell $\gamma$ sweep is the next
+   detection item; it does not change the extraction ranking, which is
+   computed on identical windows.
+
+### 13.1 CausalMorph is non-deterministic
+
+`causalmorph_algorithm.py` synthesises the non-Gaussian residuals with
+`np.random.laplace` and `np.random.shuffle` on numpy's **global** RNG,
+unseeded (lines 54–57, 270, 457). Two calls on identical input differ
+(measured max $|\Delta|$ = 7.06 on a three-variable SEM); the structure
+fitted afterwards therefore differs between runs. This is the source of the
+cross-run non-determinism in the October grid (identical scenarios, different
+rows) and of the failing equality test for the cold mode. Fix in
+`_causalmorph_seeded`: save the global state, seed from the window's stream,
+restore. Every pipeline fit is now reproducible from `(seed, regime_idx)`.
+
+### 13.2 The same convention mismatch exists in the CausalMorph repository's own benchmark
+
+`causalmorph/experiments/benchmarks/run_synthetic_experiments.py` generates
+with `causal_graph_simple_scenario_v25`, whose adjacency is
+`nx.to_pandas_adjacency(G)`, i.e. $A[\text{from},\text{to}]$ (verified in
+the IYCC copy, lines 58/100). It then
+
+- passes `pd.DataFrame(adj_true)` straight to `causalMorphing`, which reads
+  parents from **rows** (expects $[\text{to},\text{from}]$) — the §8
+  orientation error, so the transform is applied to the *parents* of each
+  edge rather than to the children; and
+- scores `model.adjacency_matrix_` (lingam's $B[\text{to},\text{from}]$)
+  against `adj_true` with `mycomparegraphs` **without a transpose**. On a
+  perfectly recovered three-variable chain this returns
+  TP = 0, FP = 2, FN = 2, reversed = 2, $F_1$ = 0, SHD = 6. With the
+  transpose it returns TP = 2, FP = 0, FN = 0 — and reversed = −2, SHD = −2,
+  because `reversed_edges = Σ[(Ê = 1) ∧ (Aᵀ = 1)] − TP` subtracts TP
+  unconditionally.
+
+Both are verified on the copy of the code vendored in this repository
+(`Full-Flow/causalmorph`). Whether the KBS paper's reported numbers were
+produced by this exact script is not something the code alone can tell; it
+needs to be checked against the paper's experiment scripts before anything
+is concluded about those results. What the code does show is that, as
+written, a perfect recovery scores 0 and a fully reversed recovery scores
+1, so "original vs transformed" comparisons made with it measure the
+opposite of what they claim.
