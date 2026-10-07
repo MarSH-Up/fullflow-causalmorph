@@ -226,7 +226,8 @@ def fig_decomposition(after, after_pipe, c2, before, boot, label_after, out):
     Positive = that row is better than 'after'. Absolute differences, not
     relative: the chosen configuration's error is small, so ratios explode."""
     # (tick label, legend description, row, reference, colour)
-    comps = [("oracle\nsegmentation", "oracle segmentation: extraction on the true change points (headroom)", c2, after, TEAL),
+    # C2 carries only the pipeline's own learner, so its headroom is measured against the pipeline, not the per-window learner
+    comps = [("oracle\nsegmentation", "oracle segmentation: the pipeline on the true change points, vs the pipeline on detected ones (headroom for the pipeline)", c2, after_pipe if after_pipe is not None else after, TEAL),
              ("old\nconfig", "old configuration: oracle seed, consensus 0.20, 10p\u00b2 deletion, v1H", before, after, ORANGE),
              ("bootstrap\n+ overlap", "bootstrap 20 @ 0.60 + overlap 0.15, pipeline on the same windows", boot, after_pipe, MAGENTA),
              ("CausalMorph\n+ chain", "CausalMorph transform + chain prior, vs the per-window learner on the same windows", after_pipe, after, PURPLE)]
