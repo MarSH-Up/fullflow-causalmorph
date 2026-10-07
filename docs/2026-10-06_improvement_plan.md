@@ -943,7 +943,9 @@ The consequence is that every edge leaving a non-root node is erased: the
 direct $V_2 \to V_3$ signal given $V_1$ falls from 0.695 to 0.016. Root nodes
 are untouched, so root → child edges survive, which is why the loss grows
 with graph depth. Stage I (MDL-selected polynomial, Taylor linearisation) is
-the part that helps and is kept unchanged.
+kept unchanged because the spec keeps it, not because it helps: on this
+branch's evidence it costs 0.03 to 0.04 on nonlinear/Laplace, and lite is at
+or below the learner alone in every benchmark cell (§14.3).
 
 ### 14.2 v2
 
@@ -995,8 +997,10 @@ wins / losses (ties are not counted).
 
 Reading the table by cell, for ICA-LiNGAM:
 
-- **linear / Laplace:** a tie (0.921 vs 0.920); v2 is the identity where
-  LiNGAM's own assumptions hold, against 0.717 for v1.
+- **linear / Laplace:** a tie (0.921 vs 0.920); v2 makes no Stage II change
+  where LiNGAM's own assumptions hold, against 0.717 for v1. It is not the
+  identity: lite and v2 still alter 259 to 270 of the 600 linear/Laplace
+  scenarios through Stages I/III (the non-tied pairs of §14.6).
 - **nonlinear / Laplace:** v2 is 0.039 below the learner alone (0.771 vs
   0.810). The gate rarely fires here (0.07, below), so v2 is within 0.004 of
   lite (0.771 vs 0.771 for ICA-LiNGAM, 0.605 vs 0.601 for DirectLiNGAM): the
@@ -1012,9 +1016,11 @@ With DirectLiNGAM, v2 matches the learner alone on linear/Laplace (0.901 vs
 stays at 0.419 and 0.369 against ICA-LiNGAM's 0.878 and 0.778. Lite
 sits at or below *none* in every cell, so linearisation without the gated
 Stage II does not produce the ICA gain on Gaussian noise.
-`n_transform_failed` was 0 on all 16 new v2 and lite rows (600 rows each), so
-every number above is a transformed fit, with no silent fallback to the raw
-window.
+`n_transform_failed` was 0 on all 16 new v2 and lite rows (600 rows each): no
+window fell back to the raw data. That column counts windows, not replicas
+(with bootstrap, a window counts if any replica failed), and it does not count
+the per-node skips inside v2 (a node left as is for too few rows, a constant
+parent, a Stage I error or a degenerate residual).
 
 Gate activation rate, by cell (`tools/v2_gate_rate.py`; K = 20 scenarios,
 about 72 to 78 nodes per cell, so a coarse estimate; windows cut at the true
@@ -1034,36 +1040,47 @@ nearly always open on the Gaussian ones.
 
 ### 14.4 Stationary replication, true prior and estimated prior
 
-Stationary experiment (corrected convention, $W = 4$), 69 configurations:
-45 linear/Laplace, 12 linear/Gaussian, 12 nonlinear/Laplace. The prior passed
-to the transform is either the true graph or the DirectLiNGAM estimate. Mean
-structure $F_1$; no run failed or returned NaN.
+Stationary experiment (corrected convention, $W = 4$,
+`tools/kbs_replication.py`), 69 configurations: 45 linear/Laplace,
+12 linear/Gaussian, 12 nonlinear/Laplace. The prior passed to the transform
+is either the true graph, walked in a topological order of the true graph,
+or each learner's own estimate from the raw data: the graph and causal order
+of ICA-LiNGAM fitted to the raw data for the ICA-LiNGAM rows, of DirectLiNGAM
+for the DirectLiNGAM rows, which is what the pipeline does. This is a
+deviation from spec §5, which names the DirectLiNGAM estimate as the prior for
+both learners (controller ruling). An earlier version of this table passed the
+true graph together with the learner's estimated order; since v2 reads each
+node's parents from the already-transformed data, a child listed before its
+parent was regressed on the parent's raw values (42 of 100 true edges were
+child-first for DirectLiNGAM on linear/Gaussian). The true-prior rows below
+replace it; the estimated-prior rows are unchanged. Mean structure $F_1$; no
+run failed or returned NaN.
 
 | cell | learner | prior | none | v1 | lite | v2 |
 |---|---|---|---|---|---|---|
-| linear / Laplace (45) | ICA-LiNGAM | true | 0.991 | 0.637 | 0.986 | 0.984 |
+| linear / Laplace (45) | ICA-LiNGAM | true | 0.991 | 0.635 | 0.986 | 0.984 |
 | linear / Laplace (45) | ICA-LiNGAM | estimated | 0.991 | 0.642 | 0.992 | 0.992 |
-| linear / Laplace (45) | DirectLiNGAM | true | 0.993 | 0.538 | 0.987 | 0.986 |
+| linear / Laplace (45) | DirectLiNGAM | true | 0.993 | 0.540 | 0.987 | 0.986 |
 | linear / Laplace (45) | DirectLiNGAM | estimated | 0.993 | 0.535 | 0.992 | 0.992 |
-| linear / Gaussian (12) | ICA-LiNGAM | true | 0.934 | 0.754 | 0.929 | **0.958** |
+| linear / Gaussian (12) | ICA-LiNGAM | true | 0.934 | 0.767 | 0.947 | **0.958** |
 | linear / Gaussian (12) | ICA-LiNGAM | estimated | 0.934 | 0.720 | 0.916 | 0.919 |
-| linear / Gaussian (12) | DirectLiNGAM | true | 0.482 | 0.663 | 0.482 | **0.808** |
+| linear / Gaussian (12) | DirectLiNGAM | true | 0.482 | 0.663 | 0.482 | **0.790** |
 | linear / Gaussian (12) | DirectLiNGAM | estimated | 0.482 | 0.412 | 0.482 | 0.459 |
-| nonlinear / Laplace (12) | ICA-LiNGAM | true | 0.832 | 0.671 | 0.749 | 0.749 |
+| nonlinear / Laplace (12) | ICA-LiNGAM | true | 0.832 | 0.674 | 0.749 | 0.749 |
 | nonlinear / Laplace (12) | ICA-LiNGAM | estimated | 0.832 | 0.652 | 0.757 | 0.757 |
-| nonlinear / Laplace (12) | DirectLiNGAM | true | 0.520 | 0.673 | 0.559 | 0.559 |
+| nonlinear / Laplace (12) | DirectLiNGAM | true | 0.520 | 0.651 | 0.567 | 0.567 |
 | nonlinear / Laplace (12) | DirectLiNGAM | estimated | 0.520 | 0.352 | 0.487 | 0.487 |
 
 On linear/Laplace with the true prior, v1 reproduces the degradation of
-§11 and §13.2 (ICA-LiNGAM 0.991 → 0.637), and v2 is within 0.007 of the
+§11 and §13.2 (ICA-LiNGAM 0.991 → 0.635), and v2 is within 0.007 of the
 learner alone (0.984). With Gaussian noise v2 is the best arm under the true
-prior (ICA-LiNGAM 0.958 vs 0.934; DirectLiNGAM 0.808 vs 0.482), but with the
+prior (ICA-LiNGAM 0.958 vs 0.934; DirectLiNGAM 0.790 vs 0.482), but with the
 estimated prior the gain mostly disappears (0.919 and 0.459), so it depends
 on how good the prior is. On nonlinear/Laplace v2 is below the learner alone
 for ICA-LiNGAM (0.749 vs 0.832), the same Stage I/III cost seen in §14.3; v1
 is also below it. Two results a sceptic would look for go the other way:
 with the true prior on nonlinear/Laplace, DirectLiNGAM is best under v1
-(0.673), above v2 (0.559) and none (0.520), and on stationary
+(0.651), above v2 (0.567) and none (0.520), and on stationary
 linear/Laplace DirectLiNGAM v2 is 0.986 against 0.993 for none. The 12-run
 blocks are small, DirectLiNGAM on linear/Gaussian is noisy, so differences of
 a few hundredths there are within noise, and the nonlinear/Gaussian cell was
@@ -1075,16 +1092,18 @@ not run on the stationary side.
 |---|---|---|---|---|
 | linear / Laplace | ICA-LiNGAM | 0.984 | 0.984 | 0.984 |
 | linear / Laplace | DirectLiNGAM | 0.986 | 0.986 | 0.986 |
-| linear / Gaussian | ICA-LiNGAM | 0.958 | 0.958 | 0.962 |
-| linear / Gaussian | DirectLiNGAM | 0.838 | 0.808 | 0.798 |
+| linear / Gaussian | ICA-LiNGAM | 0.963 | 0.958 | 0.962 |
+| linear / Gaussian | DirectLiNGAM | 0.831 | 0.790 | 0.800 |
 | nonlinear / Laplace | ICA-LiNGAM | 0.749 | 0.749 | 0.749 |
-| nonlinear / Laplace | DirectLiNGAM | 0.559 | 0.559 | 0.559 |
+| nonlinear / Laplace | DirectLiNGAM | 0.567 | 0.567 | 0.567 |
 
 The rule was to move off 0.01 only if another value were better on every block
-for both learners. None is: 0.001 beats 0.01 only for DirectLiNGAM on
-linear/Gaussian (0.838 vs 0.808), 0.05 only for ICA-LiNGAM there (0.962 vs
-0.958) and is worse for DirectLiNGAM, and everything else ties. **0.01 is
-kept.**
+for both learners. None is: 0.001 is better than 0.01 only on linear/Gaussian,
+for both learners (0.963 vs 0.958, one of 12 runs differs; 0.831 vs 0.790,
+two runs), and ties exactly on the other four blocks; 0.05 is also better only
+on linear/Gaussian (0.962 vs 0.958; 0.800 vs 0.790, the latter two wins and
+two losses). **0.01 is kept.** 0.001 is never worse than 0.01 on these
+blocks, but its edge rests on three of 24 runs.
 
 ### 14.5 Verdict against the spec's success criterion
 
@@ -1106,8 +1125,68 @@ Two limits go with this. The gain is modest where it exists (+0.011 and
 that comes from Stage I/III (linearisation, orthogonalisation and the
 transformed-parent regression), which lite shares, not from the gate.
 
+A third limit is the Stage I floor. v2 skips a node only below
+`_MIN_ROWS = 20` rows, an absolute floor that does not scale with the number
+of parents. With 5 parents and fewer than about 320 rows, MDL still selects a
+degree above 1, so the output drifts from the identity even with the gate
+closed: the median correlation of a transformed node with its original values
+is 0.44 at n = 20, 0.72 at n = 40 to 80, 0.95 at n = 160 and 1.00 at n = 320.
+The gate itself has little power below about 100 rows. The sampled
+true-regime windows (507 to 674 rows) do not reach this range, but short
+detected windows can. The queued fix is to cap `max_degree` so that the number
+of polynomial features stays at or below n/10; it is not made here, so that
+the numbers of §14.3 stay tied to the code that produced them.
+
 **Next.** The Stage I/III cost is about 0.03 to 0.04 on nonlinear/Laplace
-(0.026 for DirectLiNGAM, 0.039 for ICA-LiNGAM). The candidate fix is to
-gate Stage I as well: apply the polynomial linearisation only when the
-MDL-selected degree above 1 improves the fit beyond a threshold. Flagged, not
-done.
+(0.026 for DirectLiNGAM, 0.039 for ICA-LiNGAM). What Stage I does there is
+narrow: when the residual is kept, the output is
+$X_{\text{new}}[:, i] = y_{\text{lin}} + c\,(y - \Pi y)$, with $\Pi$ the
+projection on $[1, X_{\text{new}}[:, P]]$, so Stage I's only effect is to
+replace the OLS slope on the parents by the Taylor slope at the median (on a
+cubic toy, OLS slope 8.21 against Taylor slope 0.235, correlation 0.76). The
+first step is therefore an ablation of the OLS slope against the Taylor slope
+on nonlinear/Laplace, before adopting any Stage I gate. The candidate fix, if
+the Taylor slope is the cost, is to gate Stage I as well: apply the
+polynomial linearisation only when the MDL-selected degree above 1 improves
+the fit beyond a threshold. Flagged, not done.
+
+### 14.6 Paired statistics
+
+Paired per-scenario comparisons on benchmark v2 (600 scenarios per cell, the
+rows of §14.3), from `tools/v2_paired_stats.py`, which writes
+`results/hardening_validation/v2_paired_stats.csv`. $\Delta F_1$ is the mean
+per-scenario difference in mean structure $F_1$ (first arm minus second), with
+a 95% bootstrap CI (2000 resamples of the differences); $p$ is the Wilcoxon
+signed-rank test on the non-zero differences; $r_{rb}$ is the rank-biserial
+effect on the non-ties, (win − loss) / (win + loss).
+
+| cell | comparison | ΔF1 | CI 95% | p | win/loss/tie | r_rb |
+|---|---|---|---|---|---|---|
+| lin_laplace | v2+ICA vs ICA alone | +0.001 | [−0.001, +0.002] | 0.49 | 142/128/330 | +0.05 |
+| lin_laplace | v2+DL vs DL alone | −0.001 | [−0.003, +0.000] | 0.052 | 120/135/345 | −0.06 |
+| lin_laplace | lite+ICA vs ICA alone | −0.000 | [−0.002, +0.001] | 0.39 | 124/135/341 | −0.04 |
+| lin_laplace | v2+ICA vs v1+ICA | +0.204 | [+0.194, +0.214] | 1.8e−89 | 533/13/54 | +0.95 |
+| lin_laplace | v2+ICA vs lite+ICA | +0.001 | [+0.000, +0.002] | 0.021 | 68/47/485 | +0.18 |
+| nonlin_laplace | v2+ICA vs ICA alone | −0.039 | [−0.046, −0.031] | 3.6e−31 | 140/370/90 | −0.45 |
+| nonlin_laplace | v2+DL vs DL alone | −0.026 | [−0.032, −0.020] | 2.2e−25 | 134/357/109 | −0.45 |
+| nonlin_laplace | lite+ICA vs ICA alone | −0.038 | [−0.046, −0.031] | 7.9e−31 | 139/372/89 | −0.46 |
+| nonlin_laplace | v2+ICA vs v1+ICA | +0.193 | [+0.182, +0.205] | 2.1e−81 | 522/27/51 | +0.90 |
+| nonlin_laplace | v2+ICA vs lite+ICA | −0.000 | [−0.001, +0.000] | 0.69 | 60/49/491 | +0.10 |
+| lin_normal | v2+ICA vs ICA alone | +0.011 | [+0.003, +0.018] | 1.9e−5 | 283/201/116 | +0.17 |
+| lin_normal | v2+DL vs DL alone | −0.008 | [−0.011, −0.005] | 2.6e−8 | 182/268/150 | −0.19 |
+| lin_normal | lite+ICA vs ICA alone | −0.004 | [−0.011, +0.002] | 0.30 | 209/234/157 | −0.06 |
+| lin_normal | v2+ICA vs v1+ICA | +0.177 | [+0.167, +0.186] | 1.5e−86 | 529/23/48 | +0.92 |
+| lin_normal | v2+ICA vs lite+ICA | +0.015 | [+0.009, +0.021] | 7.5e−7 | 280/187/133 | +0.20 |
+| nonlin_normal | v2+ICA vs ICA alone | +0.042 | [+0.028, +0.056] | 1.3e−10 | 326/198/76 | +0.24 |
+| nonlin_normal | v2+DL vs DL alone | −0.004 | [−0.008, −0.000] | 0.027 | 182/220/198 | −0.09 |
+| nonlin_normal | lite+ICA vs ICA alone | −0.010 | [−0.021, +0.002] | 0.013 | 218/288/94 | −0.14 |
+| nonlin_normal | v2+ICA vs v1+ICA | +0.196 | [+0.183, +0.209] | 8.7e−74 | 508/51/41 | +0.82 |
+| nonlin_normal | v2+ICA vs lite+ICA | +0.051 | [+0.039, +0.064] | 1.1e−17 | 343/167/90 | +0.35 |
+
+On linear/Laplace the CI of v2 against the learner alone lies inside ±0.003
+for both learners, which is equivalence at that margin, not just a failure to
+find a difference. On the Gaussian cells the ICA-LiNGAM gains are significant
+with small-to-moderate effect sizes ($r_{rb}$ = 0.17 and 0.24), which is the
+honest description, since with n = 600 the p-values alone say little. On
+nonlinear/Laplace the loss is significant ($r_{rb}$ = −0.45) and the same for
+lite (−0.46), i.e. a Stage I/III cost, not a Stage II one.
