@@ -927,8 +927,8 @@ CausalMorph v2 keeps the three-stage architecture of the published algorithm
 and changes what Stage II does to the residual. The published Stage II is
 called **v1** below; the v1 numbers are our replication under the corrected
 adjacency convention of §8, used as the ablation. The learner of record per
-window is ICA-LiNGAM, and v2 is a way to get more out of it: the identity
-where the residual is already non-Gaussian, a gain where the noise is
+window is ICA-LiNGAM, and v2 is a way to get more out of it: no Stage II
+change where the residual is already non-Gaussian, a gain where the noise is
 Gaussian. Design and success criterion:
 `docs/superpowers/specs/2026-10-07-causalmorph-v2-design.md`.
 
@@ -969,8 +969,9 @@ monotone function of $\varepsilon$, so it keeps the sample pairing with every
 descendant. The **lite** ablation switches Stage II off ($\varepsilon' = \varepsilon$
 always) and keeps Stage I and III. As a probe, on the unit-test chain with
 0.9 weights the direct $V_2 \to V_3$ partial signal given $V_1$ is 0.655 in the
-original data and 0.655 after v2 (0.671 when the gate opens), against 0.016
-after v1.
+original data and 0.655 after v2 (0.671 when the gate opens). (The 0.016 of
+§14.1 is a different chain, with unit weights, so the two are not compared
+here.)
 
 ### 14.3 Benchmark v2, four arms, same windows
 
@@ -997,14 +998,17 @@ Reading the table by cell, for ICA-LiNGAM:
 - **linear / Laplace:** a tie (0.921 vs 0.920); v2 is the identity where
   LiNGAM's own assumptions hold, against 0.717 for v1.
 - **nonlinear / Laplace:** v2 is 0.039 below the learner alone (0.771 vs
-  0.810). The gate does not fire here, so v2 coincides with lite: the loss is
-  not Stage II but Stage I's polynomial linearisation, which also costs
+  0.810). The gate rarely fires here (0.07, below), so v2 is within 0.004 of
+  lite (0.771 vs 0.771 for ICA-LiNGAM, 0.605 vs 0.601 for DirectLiNGAM): the
+  loss is not Stage II but Stage I/III (linearisation, orthogonalisation and
+  the transformed-parent regression), which lite shares, and which also costs
   DirectLiNGAM 0.026 (0.605 vs 0.631).
 - **linear / Gaussian:** +0.011 (283 wins, 201 losses).
 - **nonlinear / Gaussian:** +0.041 (326 wins, 198 losses).
 
-With DirectLiNGAM, v2 matches the learner alone on the two linear cells
-(0.901 vs 0.902; 0.419 vs 0.427) and does not rescue it on Gaussian noise: it
+With DirectLiNGAM, v2 matches the learner alone on linear/Laplace (0.901 vs
+0.902, 120 / 135, within noise), is slightly below it on linear/Gaussian
+(0.419 vs 0.427, 182 / 268), and does not rescue it on Gaussian noise: it
 stays at 0.419 and 0.369 against ICA-LiNGAM's 0.878 and 0.778. Lite
 sits at or below *none* in every cell, so linearisation without the gated
 Stage II does not produce the ICA gain on Gaussian noise.
@@ -1012,9 +1016,11 @@ Stage II does not produce the ICA gain on Gaussian noise.
 every number above is a transformed fit, with no silent fallback to the raw
 window.
 
-Gate activation rate, by cell (`tools/v2_gate_rate.py`; 20 scenarios per
-cell, windows cut at the true regimes, order and graph from a DirectLiNGAM
-fit on each window, non-root nodes counted):
+Gate activation rate, by cell (`tools/v2_gate_rate.py`; K = 20 scenarios,
+about 72 to 78 nodes per cell, so a coarse estimate; windows cut at the true
+regimes, order and graph from a DirectLiNGAM fit on each window, non-root
+nodes counted). A node is *gated* when its residual is mapped to Laplace
+(Jarque-Bera $p \geq 0.01$):
 
 | cell | non-root nodes | gated | rate |
 |---|---|---|---|
@@ -1054,9 +1060,14 @@ learner alone (0.984). With Gaussian noise v2 is the best arm under the true
 prior (ICA-LiNGAM 0.958 vs 0.934; DirectLiNGAM 0.808 vs 0.482), but with the
 estimated prior the gain mostly disappears (0.919 and 0.459), so it depends
 on how good the prior is. On nonlinear/Laplace v2 is below the learner alone
-for ICA-LiNGAM (0.749 vs 0.832), the same Stage I cost seen in §14.3; v1 is
-also below it. The 12-run blocks are small, and DirectLiNGAM on linear/Gaussian
-is noisy, so differences of a few hundredths there are within noise.
+for ICA-LiNGAM (0.749 vs 0.832), the same Stage I/III cost seen in §14.3; v1
+is also below it. Two results a sceptic would look for go the other way:
+with the true prior on nonlinear/Laplace, DirectLiNGAM is best under v1
+(0.673), above v2 (0.559) and none (0.520), and on stationary
+linear/Laplace DirectLiNGAM v2 is 0.986 against 0.993 for none. The 12-run
+blocks are small, DirectLiNGAM on linear/Gaussian is noisy, so differences of
+a few hundredths there are within noise, and the nonlinear/Gaussian cell was
+not run on the stationary side.
 
 **Gate threshold.** The threshold was swept once, on the true-prior runs:
 
@@ -1092,11 +1103,11 @@ cells), so the contribution is the gated Stage II, not the linearisation.
 
 Two limits go with this. The gain is modest where it exists (+0.011 and
 +0.041 in mean $F_1$), and v2 loses about 0.04 on nonlinear/Laplace, a cost
-that comes from Stage I's linearisation (it is shared with lite), not from the
-gate.
+that comes from Stage I/III (linearisation, orthogonalisation and the
+transformed-parent regression), which lite shares, not from the gate.
 
-**Next.** Stage I's linearisation costs about 0.03 to 0.04 on
-nonlinear/Laplace (0.026 for DirectLiNGAM, 0.039 for ICA-LiNGAM). The
-candidate fix is to gate Stage I as well: apply the polynomial linearisation
-only when the MDL-selected degree above 1 improves the fit beyond a
-threshold. Flagged, not done.
+**Next.** The Stage I/III cost is about 0.03 to 0.04 on nonlinear/Laplace
+(0.026 for DirectLiNGAM, 0.039 for ICA-LiNGAM). The candidate fix is to
+gate Stage I as well: apply the polynomial linearisation only when the
+MDL-selected degree above 1 improves the fit beyond a threshold. Flagged, not
+done.
