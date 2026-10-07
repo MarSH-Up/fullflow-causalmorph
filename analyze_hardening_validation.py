@@ -128,6 +128,41 @@ def ladder_table(rows, ref_name="L3_cold"):
     return pd.DataFrame(lines)
 
 
+def compare_rows(val, names):
+    """Any set of rows on the same scenarios, the first as reference. Detection
+    for the record; structure means; paired stats vs the reference; and the
+    segmentation-outcome check pooled over all rows."""
+    rows = {n: load(os.path.join(val, n, "results.csv")) for n in names}
+    missing = [n for n, d in rows.items() if d is None or not len(d)]
+    rows = {n: d for n, d in rows.items() if d is not None and len(d)}
+    if missing:
+        print("missing rows:", ", ".join(missing))
+    common = set.intersection(*[set(d.index) for d in rows.values()])
+    rows = {n: d[d.index.isin(common)] for n, d in rows.items()}
+    ref = names[0] if names[0] in rows else next(iter(rows))
+    print_block(f"ROW COMPARISON  (n = {len(common)} scenarios in every row; reference = {ref})")
+    dt = detection_table(rows)
+    print("\n  detection:")
+    print(dt[["P@200", "R@200", "F1@200", "under_seg", "over_seg"]].round(3).to_string())
+    print("\n  structure means  (v lower is better, ^ higher is better):")
+    means = pd.DataFrame({n: {f"{m} {'^' if hib else 'v'}": d[c].mean() for c, m, hib in HEAD if c in d}
+                          for n, d in rows.items()})
+    print(means.round(3).to_string())
+    print(f"\n  paired vs {ref}  (rel > 0 = better than the reference; win/loss):")
+    rel = pd.DataFrame({n: {m: (paired(rows[ref], d, c, hib) or {}).get("rel", float("nan"))
+                            for c, m, hib in HEAD if c in d and c in rows[ref]}
+                        for n, d in rows.items() if n != ref})
+    print(rel.round(1).to_string())
+    pooled = pd.concat([d.assign(row=n) for n, d in rows.items()])
+    pooled["outcome"] = np.select([pooled.n_structures < pooled.n_regimes, pooled.n_structures > pooled.n_regimes],
+                                  ["under", "over"], "exact")
+    print("\n  structure by segmentation outcome, per row (windowed nSHD / transition SHD):")
+    g = pooled.groupby(["row", "outcome"]).agg(n=("windowed_nshd_weighted", "size"),
+                                               wnshd=("windowed_nshd_weighted", "mean"),
+                                               tshd=("transition_shd", "mean")).round(3)
+    print(g.to_string())
+
+
 def l3_head_to_head(val, before, suffixes):
     """Same pipeline (L3: bootstrap, cold start), different detectors. The
     structure-over-time metrics are what the detector has to serve, so they
@@ -188,8 +223,14 @@ def main():
                     help="suffix of the ladder/control rows to analyse, e.g. _v1K (detection rows are unaffected)")
     ap.add_argument("--l3_compare", default="",
                     help="comma-separated suffixes of L3_cold_* rows to compare head-to-head, e.g. v1J25,v1L20,v1L25")
+    ap.add_argument("--compare", default="",
+                    help="comma-separated full row names; the first is the reference, e.g. "
+                         "C0_legacy_v2,L2_cold_v2,L2_cold_v1J25_v2,L3_cold_v2,L3_cold_v1J25_v2")
     args = ap.parse_args()
 
+    if args.compare:
+        compare_rows(args.val, args.compare.split(","))
+        return
     if args.l3_compare:
         l3_head_to_head(args.val, args.before, args.l3_compare.split(","))
         return
