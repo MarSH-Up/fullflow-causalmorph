@@ -719,5 +719,40 @@ class TransformOption(unittest.TestCase):
         self.assertEqual(s.transform, "v2")
 
 
+    def test_cli_accepts_transform(self):
+        import subprocess, sys
+        out = subprocess.run([sys.executable, "run_experiments.py", "--help"], capture_output=True, text=True, cwd=ROOT).stdout
+        self.assertIn("--transform", out)
+        self.assertIn("lite", out.split("--transform")[1][:80])
+
+    def test_row_records_transform(self):
+        from run_experiments import run_loaded
+        X, names, true_cps, true_adjs, sizes = _tiny_scenario()
+        meta = dict(scenario_id="t", p=3, n_regimes=2, n_changes=1, samples_regime=500,
+                    base_pconn=0.5, noise_fraction=0.02, seed=11)
+        row = run_loaded(X, names, true_cps, true_adjs, sizes, min_samples=500, meta=meta,
+                         window_overlap=0.0, detector_version="v1L", corr_gamma=2.5, prior_mode="cold",
+                         hybrid=False, bootstrap_n=0, bootstrap_threshold=0.6, chain_prior_threshold=0.05,
+                         run_ablation=False, transform="lite")
+        self.assertEqual(row["status"], "ok", row.get("error_msg"))
+        self.assertEqual(row["transform"], "lite")
+        self.assertEqual(row["n_transform_failed"], 0)
+
+    def test_transform_failure_is_recorded(self):
+        from unittest import mock
+        import full_pipeline
+        from full_pipeline import extract_causal_structures
+        X, names, A = AdjacencyConvention._chain_sem()
+        def boom(*a, **k):
+            raise RuntimeError("synthetic transform failure")
+        with mock.patch.object(full_pipeline, "causalmorph_v2", boom):
+            s = extract_causal_structures(X, [], names, verbose=False, bootstrap_n=0,
+                                          prior_mode="cold", transform="v2")[0]
+        self.assertTrue(s.transform_failed)
+        ok = extract_causal_structures(X, [], names, verbose=False, bootstrap_n=0,
+                                       prior_mode="cold", transform="v2")[0]
+        self.assertFalse(ok.transform_failed)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -70,6 +70,7 @@ class RegimeStructure:
     prior_edge_probs: Optional[np.ndarray] = None  # soft chain prior this window received
     learner: str = "directlingam"                   # structure learner fitted after CausalMorph
     transform: str = "v1"                           # preconditioner: v1 | v2 | lite | none
+    transform_failed: bool = False                  # transform raised; raw window was used instead
 
 
 # ── SHD helpers ──────────────────────────────────────────────────────────────
@@ -718,9 +719,14 @@ def _bootstrap_fit(
     edge_probs  : np.ndarray
         Per-edge bootstrap frequency (∈ [0,1]); useful for downstream weighting.
 
+    n_failed : int
+        Number of fits (replicas, or the single-fit fallback) whose transform
+        raised and fell back to the raw data.
+
     Falls back to a single non-bootstrap fit if every bootstrap raises.
     """
     p = window_df.shape[1]
+    n_failed = 0
     edge_counts = np.zeros((p, p))
     order_counts: Dict[tuple, int] = {}
     n_ok = 0
@@ -735,6 +741,7 @@ def _bootstrap_fit(
             try:
                 fit_df = _apply_transform(transform, sample_df, prior_order, prior_adj, seed_base + b * 7919)
             except Exception:
+                n_failed += 1
                 fit_df = sample_df
         else:
             fit_df = sample_df
@@ -757,6 +764,7 @@ def _bootstrap_fit(
             try:
                 fit_df = _apply_transform(transform, window_df, prior_order, prior_adj, seed_base)
             except Exception:
+                n_failed += 1
                 fit_df = window_df
         else:
             fit_df = window_df
@@ -774,7 +782,7 @@ def _bootstrap_fit(
         final_order = list(max(order_counts.items(), key=lambda kv: kv[1])[0])
 
     adj_df = pd.DataFrame(adj_consensus, columns=variable_names, index=variable_names)
-    return final_order, adj_df, edge_probs
+    return final_order, adj_df, edge_probs, n_failed
 
 
 # ── Step 3: Iterative CausalMorph structure extraction ───────────────────────
@@ -950,10 +958,11 @@ def extract_causal_structures(
 
         # ── Warm path (CausalMorph + DirectLiNGAM) ──────────────────────────
         edge_probs_warm = None
+        transform_failed = False
         if bootstrap_n > 0:
             if verbose:
                 print(f"    Warm path: bootstrap (N={bootstrap_n}, edge_thr={bootstrap_threshold})...")
-            warm_order, adj_warm, edge_probs_warm = _bootstrap_fit(
+            warm_order, adj_warm, edge_probs_warm, n_failed = _bootstrap_fit(
                 window_df, variable_names,
                 use_cm=True,
                 prior_order=causal_order_prior, prior_adj=adj_prior,
@@ -962,6 +971,7 @@ def extract_causal_structures(
                 learner=learner,
                 transform=transform,
             )
+            transform_failed = n_failed > 0
             if q_prior is not None:
                 # threshold the posterior, not the likelihood alone
                 post = 0.5 * (q_prior + edge_probs_warm)
@@ -976,6 +986,7 @@ def extract_causal_structures(
                 if verbose:
                     print(f"    CausalMorph raised {type(exc).__name__}: {exc}")
                     print("    Falling back to raw window data.")
+                transform_failed = True
                 transformed = window_df
             if verbose:
                 print("    Fitting DirectLiNGAM on transformed data (warm)...")
@@ -993,7 +1004,7 @@ def extract_causal_structures(
             if bootstrap_n > 0:
                 if verbose:
                     print(f"    Cold path: bootstrap (N={bootstrap_n}, edge_thr={bootstrap_threshold})...")
-                cold_order, adj_cold_h, _ = _bootstrap_fit(
+                cold_order, adj_cold_h, _, _ = _bootstrap_fit(
                     window_df, variable_names,
                     use_cm=False, prior_order=None, prior_adj=None,
                     n_boot=bootstrap_n, threshold=bootstrap_threshold,
@@ -1049,6 +1060,7 @@ def extract_causal_structures(
             prior_edge_probs=q_prior,
             learner=learner,
             transform=transform,
+            transform_failed=transform_failed,
         )
         structures.append(struct)
         prev_edge_probs = struct.edge_probs
