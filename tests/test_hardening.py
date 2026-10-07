@@ -674,5 +674,50 @@ class SoftChainPrior(unittest.TestCase):
         np.testing.assert_allclose(structs[1].prior_edge_probs, expected, atol=1e-9)
 
 
+class TransformOption(unittest.TestCase):
+    """extract_causal_structures(transform=...) selects the preconditioner."""
+
+    def test_apply_transform_dispatch(self):
+        from full_pipeline import _apply_transform
+        X, names, A = AdjacencyConvention._chain_sem()
+        df = pd.DataFrame(X, columns=names)
+        none = _apply_transform("none", df, [0, 1, 2], A, 0)
+        np.testing.assert_array_equal(none.values, df.values)
+        v2 = _apply_transform("v2", df, [0, 1, 2], A, 0)
+        lite = _apply_transform("lite", df, [0, 1, 2], A, 0)
+        np.testing.assert_allclose(v2.values, lite.values)      # Laplace: gate closed
+        v1 = _apply_transform("v1", df, [0, 1, 2], A, 0)
+        self.assertFalse(np.allclose(v1.values, v2.values))
+        with self.assertRaises(ValueError):
+            _apply_transform("v3", df, [0, 1, 2], A, 0)
+
+    def test_transform_recorded_and_v2_keeps_chain(self):
+        from full_pipeline import extract_causal_structures, compute_shd
+        X, names, A = AdjacencyConvention._chain_sem()
+        s = extract_causal_structures(X, [], names, verbose=False, bootstrap_n=0,
+                                      prior_mode="cold", transform="v2")[0]
+        self.assertEqual(s.transform, "v2")
+        self.assertGreaterEqual(compute_shd(s.adjacency_matrix, A)["Recall"], 0.99)
+
+    def test_transform_none_matches_ablation(self):
+        from full_pipeline import extract_causal_structures, extract_causal_structures_ablation
+        X, names, true_cps, *_ = _tiny_scenario()
+        p = extract_causal_structures(X, true_cps, names, verbose=False, bootstrap_n=0,
+                                      prior_mode="cold", transform="none", window_overlap=0.0, seed=0)
+        a = extract_causal_structures_ablation(X, true_cps, names, verbose=False,
+                                               window_overlap=0.0, seed=0)["directlingam"]
+        for s, t in zip(p, a):
+            np.testing.assert_array_equal(
+                (np.abs(s.adjacency_matrix.values) > 0).astype(int),
+                (np.abs(t.adjacency_matrix.values) > 0).astype(int))
+
+    def test_bootstrap_accepts_transform(self):
+        from full_pipeline import extract_causal_structures
+        X, names, A = AdjacencyConvention._chain_sem()
+        s = extract_causal_structures(X, [], names, verbose=False, bootstrap_n=4,
+                                      bootstrap_threshold=0.5, prior_mode="cold", transform="v2")[0]
+        self.assertEqual(s.transform, "v2")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

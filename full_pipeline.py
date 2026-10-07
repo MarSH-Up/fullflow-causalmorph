@@ -43,6 +43,7 @@ from detectors.detectors_wavelets import (
 from detectors.detectors_correlation import detect_correlation_changes
 from detectors.detectors_coherence import detect_coherence_changes
 from core.causalmorph_algorithm import causalMorph
+from core.causalmorph_v2 import causalmorph_v2
 from evaluation.metrics import evaluate_detection, simplify_transitions
 
 
@@ -68,6 +69,7 @@ class RegimeStructure:
     edge_probs: Optional[np.ndarray] = None        # per-edge bootstrap frequency, [p, p]
     prior_edge_probs: Optional[np.ndarray] = None  # soft chain prior this window received
     learner: str = "directlingam"                   # structure learner fitted after CausalMorph
+    transform: str = "v1"                           # preconditioner: v1 | v2 | lite | none
 
 
 # ── SHD helpers ──────────────────────────────────────────────────────────────
@@ -125,6 +127,29 @@ def _causalmorph_seeded(X: pd.DataFrame, causal_order, adj_truth: pd.DataFrame, 
         return causalMorph(X, causal_order=causal_order, adjacency_matrix=_to_causalmorph(adj_truth), verbose=False)
     finally:
         np.random.set_state(state)
+
+
+TRANSFORMS = ("v1", "v2", "lite", "none")
+
+
+def _apply_transform(transform: str, X: pd.DataFrame, causal_order, adj_truth: pd.DataFrame, seed: int) -> pd.DataFrame:
+    """
+    Preconditioner applied to a window before the structure learner.
+      v1   : the published CausalMorph (seeded; see _causalmorph_seeded)
+      v2   : CausalMorph v2 — gated, sample-wise, deterministic Stage II
+      lite : v2 with Stage II off (linearise + orthogonalise only)
+      none : the raw window
+    adj_truth is A[from, to]; conversion to the layout the transforms read
+    happens here and nowhere else.
+    """
+    if transform == "none":
+        return X
+    if transform == "v1":
+        return _causalmorph_seeded(X, causal_order, adj_truth, seed)
+    if transform in ("v2", "lite"):
+        return causalmorph_v2(X, causal_order=list(causal_order), adjacency_matrix=_to_causalmorph(adj_truth),
+                              stage2=("rankmap" if transform == "v2" else "off"))
+    raise ValueError(f"transform must be one of {TRANSFORMS}, got {transform!r}")
 
 
 def _make_learner(learner: str, seed: int):
@@ -672,6 +697,7 @@ def _bootstrap_fit(
     threshold: float,
     seed_base: int,
     learner: str = "directlingam",
+    transform: str = "v1",
 ):
     """
     Fit DirectLiNGAM (optionally preceded by CausalMorph) on N bootstrap
@@ -707,7 +733,7 @@ def _bootstrap_fit(
 
         if use_cm and prior_order is not None and prior_adj is not None:
             try:
-                fit_df = _causalmorph_seeded(sample_df, prior_order, prior_adj, seed_base + b * 7919)
+                fit_df = _apply_transform(transform, sample_df, prior_order, prior_adj, seed_base + b * 7919)
             except Exception:
                 fit_df = sample_df
         else:
@@ -729,7 +755,7 @@ def _bootstrap_fit(
         # All bootstraps failed → single fit fallback on full window.
         if use_cm and prior_order is not None and prior_adj is not None:
             try:
-                fit_df = _causalmorph_seeded(window_df, prior_order, prior_adj, seed_base)
+                fit_df = _apply_transform(transform, window_df, prior_order, prior_adj, seed_base)
             except Exception:
                 fit_df = window_df
         else:
@@ -769,6 +795,7 @@ def extract_causal_structures(
     prior_density: float = 0.2,
     learner: str = "directlingam",
     seed: int = 0,
+    transform: str = "v1",
 ) -> List[RegimeStructure]:
     """
     Iteratively extract causal structures from every detected regime window.
@@ -777,6 +804,9 @@ def extract_causal_structures(
       fitted after CausalMorph, and the one that provides the cold prior.
     seed : fixes CausalMorph's residual synthesis (see _causalmorph_seeded)
       and ICA-LiNGAM's initialisation, per window and per bootstrap replica.
+    transform : preconditioner before the learner — "v1" (published CausalMorph,
+      seeded), "v2" (gated sample-wise Stage II), "lite" (v2, Stage II off),
+      "none" (raw window). See _apply_transform.
 
     prior_mode :
       "chain"  — (default) window 0 uses initial_adj/initial_order; each
@@ -827,6 +857,8 @@ def extract_causal_structures(
     """
     if prior_mode not in ("anchor", "chain", "cold"):
         raise ValueError(f"prior_mode must be 'anchor', 'chain' or 'cold', got {prior_mode!r}")
+    if transform not in TRANSFORMS:
+        raise ValueError(f"transform must be one of {TRANSFORMS}, got {transform!r}")
     T = len(X)
     boundaries = [0] + list(detected_change_points) + [T]
     raw_windows = list(zip(boundaries[:-1], boundaries[1:]))
@@ -928,6 +960,7 @@ def extract_causal_structures(
                 n_boot=bootstrap_n, threshold=bootstrap_threshold,
                 seed_base=wseed * 100003,
                 learner=learner,
+                transform=transform,
             )
             if q_prior is not None:
                 # threshold the posterior, not the likelihood alone
@@ -938,7 +971,7 @@ def extract_causal_structures(
             if verbose:
                 print("    Applying CausalMorph...")
             try:
-                transformed = _causalmorph_seeded(window_df, causal_order_prior, adj_prior, wseed)
+                transformed = _apply_transform(transform, window_df, causal_order_prior, adj_prior, wseed)
             except Exception as exc:
                 if verbose:
                     print(f"    CausalMorph raised {type(exc).__name__}: {exc}")
@@ -966,6 +999,7 @@ def extract_causal_structures(
                     n_boot=bootstrap_n, threshold=bootstrap_threshold,
                     seed_base=wseed * 100003 + 50000,
                     learner=learner,
+                    transform=transform,
                 )
             else:
                 if verbose:
@@ -1014,6 +1048,7 @@ def extract_causal_structures(
                         else (np.abs(adj_final.values) > chain_prior_edge_threshold).astype(float)),
             prior_edge_probs=q_prior,
             learner=learner,
+            transform=transform,
         )
         structures.append(struct)
         prev_edge_probs = struct.edge_probs
