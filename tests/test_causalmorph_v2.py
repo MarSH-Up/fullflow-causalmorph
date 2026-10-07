@@ -141,7 +141,7 @@ class StageThreeAndFallbacks(unittest.TestCase):
         self.assertLess(abs(np.corrcoef(det["V3"]["residual_after"], out["V2"])[0, 1]), 1e-8)
 
     def test_chain_probe_direct_edge_survives(self):
-        # v1 drops the V2->V3 partial signal given V1 from 0.695 to 0.016 on this chain
+        # 0.695 -> 0.016 under v1 is spec §1's unit-weight probe; this chain (0.9 weights) measures 0.655
         from core.causalmorph_v2 import causalmorph_v2
         X, A, _ = _chain(n=5000, seed=0, noise="laplace")
         out = causalmorph_v2(X, [0, 1, 2], _cm_adj(A))
