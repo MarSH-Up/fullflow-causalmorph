@@ -171,5 +171,30 @@ class StageThreeAndFallbacks(unittest.TestCase):
         self.assertIsNone(det["V3"]["skipped"])        # V3's parent V2 is fine
 
 
+class EndToEnd(unittest.TestCase):
+    def _fit(self, df, seed=0):
+        from lingam import DirectLiNGAM
+        m = DirectLiNGAM(); m.fit(df)
+        return (np.abs(m.adjacency_matrix_.T) > 0.05).astype(int)   # -> [from, to]
+
+    def test_v2_plus_directlingam_equals_directlingam_on_linear_laplace(self):
+        from core import causalmorph_v2
+        X, A, _ = _chain(noise="laplace")
+        est_raw = self._fit(X)
+        est_v2 = self._fit(causalmorph_v2(X, [0, 1, 2], _cm_adj(A)))
+        np.testing.assert_array_equal(est_raw, est_v2)
+        np.testing.assert_array_equal(est_v2, A.values.astype(int))
+
+    def test_v2_recovers_chain_with_gaussian_noise(self):
+        # the regime CausalMorph is for: DirectLiNGAM alone is not reliable here
+        from core import causalmorph_v2
+        X, A, _ = _chain(n=4000, seed=7, noise="normal")
+        est_v2 = self._fit(causalmorph_v2(X, [0, 1, 2], _cm_adj(A)))
+        tp = int(((est_v2 == 1) & (A.values == 1)).sum())
+        self.assertGreaterEqual(tp, 1)                 # at least one true edge, oriented
+        rev = int(((est_v2 == 1) & (A.values.T == 1)).sum())
+        self.assertLessEqual(rev, 1)
+
+
 if __name__ == "__main__":
     unittest.main()
