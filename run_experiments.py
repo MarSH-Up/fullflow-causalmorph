@@ -710,6 +710,21 @@ def run_experiments(
                 f"column); appending the new schema onto it would silently drop columns. "
                 f"Use a fresh --output_dir."
             )
+        if "transform" not in columns:
+            raise SystemExit(
+                f"{results_path} has no transform column (written before --transform existed); "
+                f"resuming would mix preconditioners in one file. Use a fresh --output_dir."
+            )
+        for key, default in (("transform", "v1"), ("learner", "directlingam")):
+            if key not in columns:
+                continue
+            requested = run_cfg.get(key, default)
+            found = set(pd.read_csv(results_path, usecols=[key], dtype=str)[key].dropna())
+            if found - {requested}:
+                raise SystemExit(
+                    f"{results_path} was written with {key}={sorted(found)}, but this run asks for "
+                    f"{key}={requested!r}; resuming would mix them in one file. Use a fresh --output_dir."
+                )
         done_ids = set(pd.read_csv(results_path, usecols=["scenario_id"],
                                    dtype=str)["scenario_id"])
         n_done   = len(done_ids)
