@@ -492,6 +492,52 @@ class LegacyPostprocessing(unittest.TestCase):
         self.assertEqual(old["n_structures"], 2)
 
 
+class TransitionF1(unittest.TestCase):
+    """transition_f1: the edge-set F1 of the learned changes against the true
+    changes, per true transition, averaged. A missed transition (both regimes
+    aligned to one window) has an empty predicted change set and scores 0;
+    transition_shd charges that case only |delta_true| / max_edges, which for
+    sparse changes is below the estimation noise of two correct fits, so it
+    rewards under-segmentation."""
+
+    names = ["V1", "V2", "V3", "V4"]
+
+    def _true(self):
+        A0 = _adj(self.names, [("V1", "V2")])
+        A1 = _adj(self.names, [("V1", "V2"), ("V2", "V3")])          # +V2->V3
+        return [A0, A1], [500], 1000
+
+    def test_missed_transition_scores_zero(self):
+        from evaluation.metrics import transition_f1
+        adjs, cps, T = self._true()
+        one_window = [_struct(self.names, [("V1", "V2"), ("V2", "V3")], T)]   # spans both regimes
+        self.assertEqual(transition_f1(one_window, adjs, cps, T, 4), 0.0)
+
+    def test_perfectly_learned_transition_scores_one(self):
+        from evaluation.metrics import transition_f1
+        adjs, cps, T = self._true()
+        s0 = _struct(self.names, [("V1", "V2")], 500, 0)
+        s1 = _struct(self.names, [("V1", "V2"), ("V2", "V3")], 500, 1); s1.window_start, s1.window_end = 500, 1000
+        self.assertEqual(transition_f1([s0, s1], adjs, cps, T, 4), 1.0)
+
+    def test_noisy_but_detected_transition_scores_between(self):
+        from evaluation.metrics import transition_f1
+        adjs, cps, T = self._true()
+        s0 = _struct(self.names, [("V1", "V2")], 500, 0)
+        # learned the true change plus one spurious change (V3->V4 appears)
+        s1 = _struct(self.names, [("V1", "V2"), ("V2", "V3"), ("V3", "V4")], 500, 1)
+        s1.window_start, s1.window_end = 500, 1000
+        f1 = transition_f1([s0, s1], adjs, cps, T, 4)
+        self.assertAlmostEqual(f1, 2 / 3, places=6)     # precision 1/2, recall 1
+
+    def test_no_true_change_and_no_predicted_change_is_perfect(self):
+        from evaluation.metrics import transition_f1
+        A = _adj(self.names, [("V1", "V2")])
+        s0 = _struct(self.names, [("V1", "V2")], 500, 0)
+        s1 = _struct(self.names, [("V1", "V2")], 500, 1); s1.window_start, s1.window_end = 500, 1000
+        self.assertEqual(transition_f1([s0, s1], [A, A], [500], 1000, 4), 1.0)
+
+
 # ── 2.5 soft chain prior ─────────────────────────────────────────────────────
 
 class SoftChainPrior(unittest.TestCase):

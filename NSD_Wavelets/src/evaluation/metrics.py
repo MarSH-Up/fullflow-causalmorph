@@ -368,6 +368,51 @@ def transition_shd(structures, true_adjs, true_cps, T, p) -> float:
     return float(total / n_trans) if n_trans else 0.0
 
 
+def transition_f1(structures, true_adjs, true_cps, T, p) -> float:
+    """
+    Edge-set F1 of the learned regime *changes* against the true changes.
+
+    For each adjacent true pair (G_k, G_{k+1}): delta_true = G_k xor G_{k+1},
+    delta_pred = the xor of the two aligned predictions, or the empty set when
+    both regimes align to the same window (a missed transition) or either has
+    no aligned window. F1 is computed on those two edge sets and averaged over
+    transitions; a transition with no true change and no predicted change is
+    perfect (1.0). NaN when the scenario has fewer than two regimes.
+
+    Why not transition_shd: that metric charges |delta_true xor delta_pred| /
+    max_edges, so a missed transition costs only |delta_true|, which for sparse
+    changes is below the estimation noise of two correct fits — it rewards
+    predicting no change. Measured on the 600-scenario sample: under-segmented
+    scenarios had the LOWEST transition_shd in every configuration.
+    """
+    boundaries = [0] + list(true_cps) + [T]
+    regime_spans = list(zip(boundaries[:-1], boundaries[1:]))
+    n_reg = len(regime_spans)
+    if n_reg < 2 or p < 2:
+        return float("nan")
+
+    aligned = [_best_overlap_struct(structures, rs, re)[1] for rs, re in regime_spans]
+
+    scores = []
+    for k in range(n_reg - 1):
+        if k + 1 >= len(true_adjs):
+            continue
+        true_delta = _bin_adj(true_adjs[k]) ^ _bin_adj(true_adjs[k + 1])
+        a, b = aligned[k], aligned[k + 1]
+        if a is None or b is None or a is b:
+            pred_delta = np.zeros_like(true_delta)
+        else:
+            pred_delta = _bin_adj(a.adjacency_matrix) ^ _bin_adj(b.adjacency_matrix)
+        tp = int(np.sum(pred_delta & true_delta))
+        fp = int(np.sum(pred_delta & ~true_delta))
+        fn = int(np.sum(true_delta & ~pred_delta))
+        if tp + fp + fn == 0:
+            scores.append(1.0)
+        else:
+            scores.append(2 * tp / (2 * tp + fp + fn))
+    return float(np.mean(scores)) if scores else float("nan")
+
+
 def dynamic_score(
     windowed_nshd: float,
     detection_f1: float,

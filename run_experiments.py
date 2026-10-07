@@ -69,6 +69,7 @@ from evaluation.metrics import (
     evaluate_detection,
     simplify_transitions,
     windowed_nshd_weighted,
+    transition_f1,
     coverage_score,
     transition_shd,
     dynamic_score,
@@ -269,6 +270,7 @@ def _extract_metrics(
         "windowed_nshd_weighted": round(windowed_nshd_weighted(structs, true_adjs, true_cps_lst, T_full, p), 4),
         "coverage_score":         round(coverage_score(structs, true_cps_lst, T_full), 4),
         "transition_shd":         round(transition_shd(structs, true_adjs, true_cps_lst, T_full, p), 4),
+        "transition_f1":          round(transition_f1(structs, true_adjs, true_cps_lst, T_full, p), 4),
     }
     cm_dyn["dynamic_score"] = round(
         dynamic_score(cm_dyn["windowed_nshd_weighted"], det_f1, cm_dyn["coverage_score"]), 4
@@ -310,6 +312,7 @@ def _extract_metrics(
             ablation_out[f"{method}_windowed_nshd_weighted"] = round(w_a, 4)
             ablation_out[f"{method}_coverage_score"]         = round(c_a, 4)
             ablation_out[f"{method}_transition_shd"]         = round(t_a, 4)
+            ablation_out[f"{method}_transition_f1"]          = round(transition_f1(structs_m, true_adjs, true_cps_lst, T_full, p), 4)
             ablation_out[f"{method}_dynamic_score"]          = round(dynamic_score(w_a, det_f1, c_a), 4)
 
     return {
