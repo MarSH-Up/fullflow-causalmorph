@@ -857,6 +857,28 @@ Three readings.
    detection item; it does not change the extraction ranking, which is
    computed on identical windows.
 
+### 13.0 Detection on the nonlinear cell: $\gamma$ does not fix it
+
+v1L on nonlinear / Laplace, micro P / R at tolerance 200, 600 scenarios:
+
+| $\gamma$ | P | R | F1 | under-segmented | over-segmented |
+|---|---|---|---|---|---|
+| 2.5 | 0.398 | 0.626 | 0.487 | 33.7% | 40.8% |
+| 3.0 | 0.401 | 0.564 | 0.469 | 38.0% | 34.8% |
+| 3.5 | 0.408 | 0.522 | 0.458 | 40.8% | 30.0% |
+| 4.0 | 0.408 | 0.475 | 0.439 | 44.3% | 26.8% |
+
+Precision is flat at 0.40 while recall falls: the false alarms are not
+threshold noise, they are real shifts of the correlation statistic inside a
+regime. With a cubic mechanism the pairwise correlation of $(X_i, X_j)$
+depends on the realised range of the parent in each block, so blocks drawn
+from the same regime differ in correlation by more than the Gaussian null
+allows. The fix is a statistic that is invariant to monotone mechanisms
+(a rank-correlation change statistic — Spearman or Kendall — with the same
+Fisher standardisation) rather than a larger margin. Queued as a detector
+item; it does not affect the extraction comparison, which uses identical
+windows per cell.
+
 ### 13.1 CausalMorph is non-deterministic
 
 `causalmorph_algorithm.py` synthesises the non-Gaussian residuals with
