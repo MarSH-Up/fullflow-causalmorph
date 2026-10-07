@@ -8,6 +8,9 @@
 #   P_cold_<cell>       CausalMorph + DirectLiNGAM, cold prior every window (no chain)
 #   P_cold_ica_<cell>   CausalMorph + ICA-LiNGAM,   cold prior every window
 #   P_chain_ica_<cell>  CausalMorph + ICA-LiNGAM,   chain prior (isolates the learner)
+#   P_v2_<cell>, P_v2_ica_<cell>      same as P_cold_*, with --transform v2
+#   P_lite_<cell>, P_lite_ica_<cell>  same as P_cold_*, with --transform lite
+#   ARMS="v1 v2 lite" (default) selects which arms to run.
 #
 #   ./run_cold_learner_rows.sh
 #   CELLS="lin_laplace" ./run_cold_learner_rows.sh
@@ -33,10 +36,20 @@ run_row () {
   echo "$name" >> "$OUT/rows_done.txt"
 }
 
+ARMS="${ARMS:-v1 v2 lite}"          # v1 rows are the existing P_cold_* / P_cold_ica_*
 for c in $CELLS; do
   ds="$(dataset_for "$c")"
-  run_row "$ds" "P_cold_$c"      --prior_mode cold
-  run_row "$ds" "P_cold_ica_$c"  --prior_mode cold  --learner icalingam
-  run_row "$ds" "P_chain_ica_$c" --prior_mode chain --learner icalingam
+  for arm in $ARMS; do
+    case "$arm" in
+      v1)   run_row "$ds" "P_cold_$c"      --prior_mode cold
+            run_row "$ds" "P_cold_ica_$c"  --prior_mode cold --learner icalingam
+            run_row "$ds" "P_chain_ica_$c" --prior_mode chain --learner icalingam ;;
+      v2)   run_row "$ds" "P_v2_$c"        --prior_mode cold --transform v2
+            run_row "$ds" "P_v2_ica_$c"    --prior_mode cold --transform v2 --learner icalingam ;;
+      lite) run_row "$ds" "P_lite_$c"      --prior_mode cold --transform lite
+            run_row "$ds" "P_lite_ica_$c"  --prior_mode cold --transform lite --learner icalingam ;;
+      *) echo "unknown arm $arm" >&2; exit 1 ;;
+    esac
+  done
 done
 echo "COLD/LEARNER ROWS DONE"
