@@ -691,6 +691,23 @@ class TransformOption(unittest.TestCase):
         with self.assertRaises(ValueError):
             _apply_transform("v3", df, [0, 1, 2], A, 0)
 
+    def test_v2_dispatch_orientation_on_gaussian_chain(self):
+        # Gaussian noise opens the gate, so a reversed prior (the [from, to]
+        # truth handed over without _to_causalmorph) would transform the root.
+        from full_pipeline import _apply_transform
+        rng = np.random.default_rng(21)
+        e = rng.normal(size=(3000, 3))
+        x1 = e[:, 0]; x2 = 0.9 * x1 + e[:, 1]; x3 = 0.9 * x2 + e[:, 2]
+        names = ["V1", "V2", "V3"]
+        df = pd.DataFrame(np.c_[x1, x2, x3], columns=names)
+        A = _adj(names, [("V1", "V2"), ("V2", "V3")])
+        v2 = _apply_transform("v2", df, [0, 1, 2], A, 0)
+        lite = _apply_transform("lite", df, [0, 1, 2], A, 0)
+        np.testing.assert_array_equal(v2["V1"].values, df["V1"].values)
+        self.assertFalse(np.allclose(v2["V2"].values, df["V2"].values))
+        self.assertFalse(np.allclose(v2["V3"].values, df["V3"].values))
+        self.assertFalse(np.allclose(v2.values, lite.values))
+
     def test_transform_recorded_and_v2_keeps_chain(self):
         from full_pipeline import extract_causal_structures, compute_shd
         X, names, A = AdjacencyConvention._chain_sem()
@@ -706,7 +723,9 @@ class TransformOption(unittest.TestCase):
                                       prior_mode="cold", transform="none", window_overlap=0.0, seed=0)
         a = extract_causal_structures_ablation(X, true_cps, names, verbose=False,
                                                window_overlap=0.0, seed=0)["directlingam"]
+        self.assertEqual(len(p), len(a))
         for s, t in zip(p, a):
+            self.assertEqual((s.window_start, s.window_end), (t.window_start, t.window_end))
             np.testing.assert_array_equal(
                 (np.abs(s.adjacency_matrix.values) > 0).astype(int),
                 (np.abs(t.adjacency_matrix.values) > 0).astype(int))
