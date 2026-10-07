@@ -918,3 +918,185 @@ is concluded about those results. What the code does show is that, as
 written, a perfect recovery scores 0 and a fully reversed recovery scores
 1, so "original vs transformed" comparisons made with it measure the
 opposite of what they claim.
+
+---
+
+## 14. CausalMorph v2 (2026-10-07)
+
+CausalMorph v2 keeps the three-stage architecture of the published algorithm
+and changes what Stage II does to the residual. The published Stage II is
+called **v1** below; the v1 numbers are our replication under the corrected
+adjacency convention of §8, used as the ablation. The learner of record per
+window is ICA-LiNGAM, and v2 is a way to get more out of it: the identity
+where the residual is already non-Gaussian, a gain where the noise is
+Gaussian. Design and success criterion:
+`docs/superpowers/specs/2026-10-07-causalmorph-v2-design.md`.
+
+### 14.1 What Stage II did
+
+On a chain $V_1 \to V_2 \to V_3$, v1 replaces the residual $\varepsilon$ of
+each non-root node by an i.i.d. non-Gaussian draw, shuffled and recoloured to
+the same variance. That synthetic residual is independent of the real one
+(measured correlation −0.002), so the transformed variable keeps only the
+part its parents explain: $\mathrm{corr}(V_2^{\text{new}}, V_2) = R^2 = 0.50$.
+The consequence is that every edge leaving a non-root node is erased: the
+direct $V_2 \to V_3$ signal given $V_1$ falls from 0.695 to 0.016. Root nodes
+are untouched, so root → child edges survive, which is why the loss grows
+with graph depth. Stage I (MDL-selected polynomial, Taylor linearisation) is
+the part that helps and is kept unchanged.
+
+### 14.2 v2
+
+For each non-root node $i$, in causal order:
+
+1. The parents are taken from the **transformed** data $X_{\text{new}}$, so the
+   structural equations the learner sees are consistent (v1 regresses on the
+   original parents).
+2. Stage I is unchanged: standardise the parents, select the polynomial
+   degree by MDL, linearise around the coordinate-wise median, giving
+   $y_{\text{lin}}$ and $\varepsilon = y - y_{\text{lin}}$.
+3. Gate: if the Jarque-Bera $p$-value of $\varepsilon$ is below 0.01, the
+   residual is already non-Gaussian and $\varepsilon' = \varepsilon$.
+4. Otherwise $\varepsilon' = s \, F^{-1}_{\text{Laplace}}(r/(n+1))$, a monotone
+   rank map of $\varepsilon$ to the Laplace quantiles, with $s$ chosen so
+   that $\mathrm{sd}(\varepsilon') = \mathrm{sd}(\varepsilon)$.
+5. Stage III: $\varepsilon'$ is orthogonalised against $[1, X_{\text{new}}[:, P]]$
+   by a QR decomposition, rescaled to $\mathrm{sd}(\varepsilon)$, and added back
+   to $y_{\text{lin}}$.
+
+No random number is drawn anywhere: $\varepsilon'$ is a deterministic, strictly
+monotone function of $\varepsilon$, so it keeps the sample pairing with every
+descendant. The **lite** ablation switches Stage II off ($\varepsilon' = \varepsilon$
+always) and keeps Stage I and III. As a probe, on the unit-test chain with
+0.9 weights the direct $V_2 \to V_3$ partial signal given $V_1$ is 0.655 in the
+original data and 0.655 after v2 (0.671 when the gate opens), against 0.016
+after v1.
+
+### 14.3 Benchmark v2, four arms, same windows
+
+Same 600 scenario ids and cells as §13; v1L $\gamma$2.5 windows, cold start,
+no bootstrap, no overlap, consensus 0.5, corrected convention. Mean structure
+$F_1$ per window. *none* is the learner alone on the same windows; *v1*,
+*lite* and *v2* are the learner after the corresponding transform. The last
+column is the paired per-scenario comparison of v2 against *none*, as
+wins / losses (ties are not counted).
+
+| cell | learner | none | v1 | lite | v2 | v2 vs none (win/loss) |
+|---|---|---|---|---|---|---|
+| linear / Laplace | DirectLiNGAM | 0.902 | 0.616 | 0.901 | 0.901 | 120 / 135 |
+| linear / Laplace | ICA-LiNGAM | 0.920 | 0.717 | 0.920 | 0.921 | 142 / 128 |
+| nonlinear / Laplace | DirectLiNGAM | 0.631 | 0.445 | 0.601 | 0.605 | 134 / 357 |
+| nonlinear / Laplace | ICA-LiNGAM | 0.810 | 0.578 | 0.771 | 0.771 | 140 / 370 |
+| linear / Gaussian | DirectLiNGAM | 0.427 | 0.327 | 0.424 | 0.419 | 182 / 268 |
+| linear / Gaussian | ICA-LiNGAM | 0.867 | 0.701 | 0.863 | **0.878** | **283 / 201** |
+| nonlinear / Gaussian | DirectLiNGAM | 0.374 | 0.275 | 0.360 | 0.369 | 182 / 220 |
+| nonlinear / Gaussian | ICA-LiNGAM | 0.737 | 0.582 | 0.727 | **0.778** | **326 / 198** |
+
+Reading the table by cell, for ICA-LiNGAM:
+
+- **linear / Laplace:** a tie (0.921 vs 0.920); v2 is the identity where
+  LiNGAM's own assumptions hold, against 0.717 for v1.
+- **nonlinear / Laplace:** v2 is 0.039 below the learner alone (0.771 vs
+  0.810). The gate does not fire here, so v2 coincides with lite: the loss is
+  not Stage II but Stage I's polynomial linearisation, which also costs
+  DirectLiNGAM 0.026 (0.605 vs 0.631).
+- **linear / Gaussian:** +0.011 (283 wins, 201 losses).
+- **nonlinear / Gaussian:** +0.041 (326 wins, 198 losses).
+
+With DirectLiNGAM, v2 matches the learner alone on the two linear cells
+(0.901 vs 0.902; 0.419 vs 0.427) and does not rescue it on Gaussian noise: it
+stays at 0.419 and 0.369 against ICA-LiNGAM's 0.878 and 0.778. Lite
+sits at or below *none* in every cell, so linearisation without the gated
+Stage II does not produce the ICA gain on Gaussian noise.
+`n_transform_failed` was 0 on all 16 new v2 and lite rows (600 rows each), so
+every number above is a transformed fit, with no silent fallback to the raw
+window.
+
+Gate activation rate, by cell (`tools/v2_gate_rate.py`; 20 scenarios per
+cell, windows cut at the true regimes, order and graph from a DirectLiNGAM
+fit on each window, non-root nodes counted):
+
+| cell | non-root nodes | gated | rate |
+|---|---|---|---|
+| linear / Laplace | 72 | 2 | 0.03 |
+| nonlinear / Laplace | 72 | 5 | 0.07 |
+| linear / Gaussian | 77 | 75 | 0.97 |
+| nonlinear / Gaussian | 78 | 76 | 0.97 |
+
+The gate does what it is for: it is nearly closed on the Laplace cells and
+nearly always open on the Gaussian ones.
+
+### 14.4 Stationary replication, true prior and estimated prior
+
+Stationary experiment (corrected convention, $W = 4$), 69 configurations:
+45 linear/Laplace, 12 linear/Gaussian, 12 nonlinear/Laplace. The prior passed
+to the transform is either the true graph or the DirectLiNGAM estimate. Mean
+structure $F_1$; no run failed or returned NaN.
+
+| cell | learner | prior | none | v1 | lite | v2 |
+|---|---|---|---|---|---|---|
+| linear / Laplace (45) | ICA-LiNGAM | true | 0.991 | 0.637 | 0.986 | 0.984 |
+| linear / Laplace (45) | ICA-LiNGAM | estimated | 0.991 | 0.642 | 0.992 | 0.992 |
+| linear / Laplace (45) | DirectLiNGAM | true | 0.993 | 0.538 | 0.987 | 0.986 |
+| linear / Laplace (45) | DirectLiNGAM | estimated | 0.993 | 0.535 | 0.992 | 0.992 |
+| linear / Gaussian (12) | ICA-LiNGAM | true | 0.934 | 0.754 | 0.929 | **0.958** |
+| linear / Gaussian (12) | ICA-LiNGAM | estimated | 0.934 | 0.720 | 0.916 | 0.919 |
+| linear / Gaussian (12) | DirectLiNGAM | true | 0.482 | 0.663 | 0.482 | **0.808** |
+| linear / Gaussian (12) | DirectLiNGAM | estimated | 0.482 | 0.412 | 0.482 | 0.459 |
+| nonlinear / Laplace (12) | ICA-LiNGAM | true | 0.832 | 0.671 | 0.749 | 0.749 |
+| nonlinear / Laplace (12) | ICA-LiNGAM | estimated | 0.832 | 0.652 | 0.757 | 0.757 |
+| nonlinear / Laplace (12) | DirectLiNGAM | true | 0.520 | 0.673 | 0.559 | 0.559 |
+| nonlinear / Laplace (12) | DirectLiNGAM | estimated | 0.520 | 0.352 | 0.487 | 0.487 |
+
+On linear/Laplace with the true prior, v1 reproduces the degradation of
+§11 and §13.2 (ICA-LiNGAM 0.991 → 0.637), and v2 is within 0.007 of the
+learner alone (0.984). With Gaussian noise v2 is the best arm under the true
+prior (ICA-LiNGAM 0.958 vs 0.934; DirectLiNGAM 0.808 vs 0.482), but with the
+estimated prior the gain mostly disappears (0.919 and 0.459), so it depends
+on how good the prior is. On nonlinear/Laplace v2 is below the learner alone
+for ICA-LiNGAM (0.749 vs 0.832), the same Stage I cost seen in §14.3; v1 is
+also below it. The 12-run blocks are small, and DirectLiNGAM on linear/Gaussian
+is noisy, so differences of a few hundredths there are within noise.
+
+**Gate threshold.** The threshold was swept once, on the true-prior runs:
+
+| cell | learner | $\alpha = 0.001$ | $\alpha = 0.01$ | $\alpha = 0.05$ |
+|---|---|---|---|---|
+| linear / Laplace | ICA-LiNGAM | 0.984 | 0.984 | 0.984 |
+| linear / Laplace | DirectLiNGAM | 0.986 | 0.986 | 0.986 |
+| linear / Gaussian | ICA-LiNGAM | 0.958 | 0.958 | 0.962 |
+| linear / Gaussian | DirectLiNGAM | 0.838 | 0.808 | 0.798 |
+| nonlinear / Laplace | ICA-LiNGAM | 0.749 | 0.749 | 0.749 |
+| nonlinear / Laplace | DirectLiNGAM | 0.559 | 0.559 | 0.559 |
+
+The rule was to move off 0.01 only if another value were better on every block
+for both learners. None is: 0.001 beats 0.01 only for DirectLiNGAM on
+linear/Gaussian (0.838 vs 0.808), 0.05 only for ICA-LiNGAM there (0.962 vs
+0.958) and is worse for DirectLiNGAM, and everything else ties. **0.01 is
+kept.**
+
+### 14.5 Verdict against the spec's success criterion
+
+The criterion (design §2) is, per learner, that v2 + learner is at least as
+good as the learner alone on linear/Laplace, and better in at least one
+assumption-violating cell. **It is met for ICA-LiNGAM and not met for
+DirectLiNGAM.** For ICA-LiNGAM v2 ties the learner alone on linear/Laplace
+(0.921 vs 0.920) and is better on both Gaussian cells (+0.011 on
+linear/Gaussian, 283 / 201; +0.041 on nonlinear/Gaussian, 326 / 198). For
+DirectLiNGAM v2 matches the learner alone on the linear/Laplace cell
+(0.901 vs 0.902) but is not better in any violating cell: it is below on
+linear/Gaussian (0.419 vs 0.427), nonlinear/Gaussian (0.369 vs 0.374) and
+nonlinear/Laplace (0.605 vs 0.631). Lite alone does not meet the criterion for
+either learner (ICA-LiNGAM: 0.863 vs 0.867 and 0.727 vs 0.737 on the Gaussian
+cells), so the contribution is the gated Stage II, not the linearisation.
+
+Two limits go with this. The gain is modest where it exists (+0.011 and
++0.041 in mean $F_1$), and v2 loses about 0.04 on nonlinear/Laplace, a cost
+that comes from Stage I's linearisation (it is shared with lite), not from the
+gate.
+
+**Next.** Stage I's linearisation costs about 0.03 to 0.04 on
+nonlinear/Laplace (0.026 for DirectLiNGAM, 0.039 for ICA-LiNGAM). The
+candidate fix is to gate Stage I as well: apply the polynomial linearisation
+only when the MDL-selected degree above 1 improves the fit beyond a
+threshold. Flagged, not done.
