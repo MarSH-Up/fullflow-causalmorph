@@ -295,7 +295,8 @@ def main():
     l3 = remap_learner(l3_raw, args.after_method)
     common = set(before.index) & set(det.index) & set(l3.index)
     before, det, l3 = before[before.index.isin(common)], det[det.index.isin(common)], l3[l3.index.isin(common)]
-    l3_pipe = l3_raw[l3_raw.index.isin(common)] if args.after_method != "pipeline" else None
+    # with the pipeline itself as 'after', the bootstrap bar compares against it directly
+    l3_pipe = l3_raw[l3_raw.index.isin(common)] if args.after_method != "pipeline" else l3
     print(f"scenarios in every row: {len(common)}\nwriting to {args.out}/")
 
     fig_detection_summary(before, det, args.label, args.out)
