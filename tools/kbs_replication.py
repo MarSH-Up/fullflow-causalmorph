@@ -10,7 +10,7 @@ Run: cd Full-Flow && W=4 OMP_NUM_THREADS=1 python tools/kbs_replication.py
 """
 import itertools, os, sys, warnings
 warnings.filterwarnings("ignore")
-import numpy as np, pandas as pd
+import networkx as nx, numpy as np, pandas as pd
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT); sys.path.insert(0, os.path.join(ROOT, "causalmorph"))
 sys.path.insert(0, "/Users/mdlsh/Desktop/Research/PhD/Code/IYCC/IYCC/src")
@@ -32,15 +32,22 @@ def one(cfg):
             signal_strength=2.0, nsamples=cfg["n"], seed=cfg["seed"], mode=cfg["mode"], nonlin_func=cfg["func"],
             nonlinearity=cfg["nl"], max_attempts=20, min_std=1e-6, min_edges=1)
     X = X.astype(float); A = A.astype(float)
+    # The true-prior arms and the gate sweep walk a topological order of the
+    # TRUE graph: v2 reads each node's parents from the already-transformed
+    # data, so an order that lists a child before its parent would regress it
+    # on the parent's raw values. The estimated-prior arms keep the learner's
+    # own raw-data order, as the pipeline does.
+    topo = list(nx.topological_sort(nx.from_pandas_adjacency(A, create_using=nx.DiGraph)))
+    order_true = [list(A.columns).index(v) for v in topo]
     out = dict(cfg)
     for alg in ("icalingam", "directlingam"):
         m0 = _make_learner(alg, cfg["seed"]).fit(X)
         est0 = pd.DataFrame(binar(_from_lingam(m0.adjacency_matrix_)), index=A.index, columns=A.columns)
         order0 = list(m0.causal_order_)
-        for prior_name, prior_adj in (("true", A), ("est", est0)):
+        for prior_name, prior_adj, order in (("true", A, order_true), ("est", est0, order0)):
             for arm in ARMS:
                 try:
-                    T = _apply_transform(arm, X, order0, prior_adj, cfg["seed"])
+                    T = _apply_transform(arm, X, order, prior_adj, cfg["seed"])
                     m = _make_learner(alg, cfg["seed"]).fit(T)
                     est = pd.DataFrame(binar(_from_lingam(m.adjacency_matrix_)), index=A.index, columns=A.columns)
                     out[f"{alg}_{prior_name}_{arm}"] = compute_shd(est, A)["F1"]
@@ -48,7 +55,7 @@ def one(cfg):
                     out[f"{alg}_{prior_name}_{arm}"] = float("nan"); out["error"] = repr(exc)[:120]
         for alpha in ALPHAS:
             try:
-                T = causalmorph_v2(X, order0, _to_causalmorph(A), gate_alpha=alpha)
+                T = causalmorph_v2(X, order_true, _to_causalmorph(A), gate_alpha=alpha)
                 m = _make_learner(alg, cfg["seed"]).fit(T)
                 est = pd.DataFrame(binar(_from_lingam(m.adjacency_matrix_)), index=A.index, columns=A.columns)
                 out[f"{alg}_true_v2_a{alpha}"] = compute_shd(est, A)["F1"]
