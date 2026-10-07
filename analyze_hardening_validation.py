@@ -129,6 +129,49 @@ def ladder_table(rows, ref_name="L3_cold"):
     return pd.DataFrame(lines)
 
 
+def benchmark_v2_summary(val):
+    """The 2x2: mechanism {linear, nonlinear} x noise {laplace, normal}. Per
+    cell, detection (D row) and, on the same v1L windows (LB row), the pipeline
+    with CausalMorph against DirectLiNGAM and ICA-LiNGAM per window."""
+    cells = [("linear / laplace  (the grid)", "D_v1L_g2.5", "LB_v1L25_v2"),
+             ("nonlinear / laplace", "D_v1L_nonlin_laplace", "LB_nonlin_laplace"),
+             ("linear / normal", "D_v1L_lin_normal", "LB_lin_normal"),
+             ("nonlinear / normal", "D_v1L_nonlin_normal", "LB_nonlin_normal")]
+    learners = [("pipeline (CausalMorph + chain)", "mean_struct_"), ("DirectLiNGAM / window", "directlingam_mean_"),
+                ("ICA-LiNGAM / window", "icalingam_mean_")]
+    print_block("BENCHMARK V2  (same 600 scenario ids per cell; cold start, no bootstrap; corrected convention)")
+    for label, dname, lbname in cells:
+        d = load(os.path.join(val, dname, "results.csv")); lb = load(os.path.join(val, lbname, "results.csv"))
+        print(f"\n  {label}")
+        if d is not None and len(d):
+            P, R, F = micro_prf(d)
+            print(f"    detection (v1L): P={P:.3f} R={R:.3f} F1={F:.3f}  under-seg={(d.n_structures < d.n_regimes).mean():.1%}")
+        else:
+            print("    detection: (missing)")
+        if lb is None or not len(lb):
+            print("    extraction: (missing)"); continue
+        print(f"    {'extraction, same windows':<32}{'P':>7}{'R':>7}{'F1':>7}{'nSHD':>8}{'wnSHD':>8}{'trF1':>7}")
+        for lname, pre in learners:
+            nshd = lb["mean_norm_shd" if pre == "mean_struct_" else pre.replace("mean_", "") + "mean_norm_shd"]
+            wn = lb["windowed_nshd_weighted" if pre == "mean_struct_" else pre.replace("mean_", "") + "windowed_nshd_weighted"]
+            tf = lb["transition_f1" if pre == "mean_struct_" else pre.replace("mean_", "") + "transition_f1"]
+            print(f"    {lname:<32}{lb[pre+'precision'].mean():>7.3f}{lb[pre+'recall'].mean():>7.3f}{lb[pre+'f1'].mean():>7.3f}"
+                  f"{nshd.mean():>8.3f}{wn.mean():>8.3f}{tf.mean():>7.3f}")
+        # paired: pipeline vs each learner on F1
+        for lname, pre in learners[1:]:
+            a, b = lb["mean_struct_f1"], lb[pre + "f1"]; m = a.notna() & b.notna()
+            w, l = int((a[m] > b[m]).sum()), int((a[m] < b[m]).sum())
+            print(f"    pipeline vs {lname.split(' /')[0]:<14} F1 win/loss {w}/{l}")
+
+
+def micro_prf(d, tol=200):
+    TP = FP = FN = 0
+    for tc, dc in zip(d.true_cps.map(parse), d.detected_cps.map(parse)):
+        a, b, c = match(tc, dc, tol); TP += a; FP += b; FN += c
+    P = TP / (TP + FP) if TP + FP else 0.0; R = TP / (TP + FN) if TP + FN else 0.0
+    return P, R, (2 * P * R / (P + R) if P + R else 0.0)
+
+
 def compare_rows(val, names):
     """Any set of rows on the same scenarios, the first as reference. Detection
     for the record; structure means; paired stats vs the reference; and the
@@ -224,11 +267,16 @@ def main():
                     help="suffix of the ladder/control rows to analyse, e.g. _v1K (detection rows are unaffected)")
     ap.add_argument("--l3_compare", default="",
                     help="comma-separated suffixes of L3_cold_* rows to compare head-to-head, e.g. v1J25,v1L20,v1L25")
+    ap.add_argument("--v2", action="store_true",
+                    help="benchmark v2 summary: per variant, detection and pipeline vs per-window learners")
     ap.add_argument("--compare", default="",
                     help="comma-separated full row names; the first is the reference, e.g. "
                          "C0_legacy_v2,L2_cold_v2,L2_cold_v1J25_v2,L3_cold_v2,L3_cold_v1J25_v2")
     args = ap.parse_args()
 
+    if args.v2:
+        benchmark_v2_summary(args.val)
+        return
     if args.compare:
         compare_rows(args.val, args.compare.split(","))
         return
