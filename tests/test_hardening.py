@@ -823,5 +823,22 @@ class StageOneCapTransforms(unittest.TestCase):
         self.assertEqual(row["n_transform_failed"], 0)
 
 
+class SkeletonColumns(unittest.TestCase):
+    def test_rows_carry_skeleton_f1(self):
+        from run_experiments import run_loaded
+        X, names, true_cps, true_adjs, sizes = _tiny_scenario()
+        meta = dict(scenario_id="t", p=3, n_regimes=2, n_changes=1, samples_regime=500,
+                    base_pconn=0.5, noise_fraction=0.02, seed=11)
+        row = run_loaded(X, names, true_cps, true_adjs, sizes, min_samples=500, meta=meta,
+                         window_overlap=0.0, detector_version="v1L", corr_gamma=2.5, prior_mode="cold",
+                         hybrid=False, bootstrap_n=0, bootstrap_threshold=0.6, chain_prior_threshold=0.05,
+                         run_ablation=True, transform="v2cap", learner="icalingam")
+        self.assertEqual(row["status"], "ok", row.get("error_msg"))
+        for k in ("mean_skeleton_f1", "icalingam_mean_skeleton_f1", "directlingam_mean_skeleton_f1"):
+            self.assertTrue(0.0 <= row[k] <= 1.0, (k, row[k]))
+        # orientation-free F1 can never be below the directed one on the same windows
+        self.assertGreaterEqual(row["mean_skeleton_f1"] + 1e-9, row["mean_struct_f1"] - 0.0015)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

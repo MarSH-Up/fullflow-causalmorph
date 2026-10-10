@@ -193,6 +193,15 @@ def extraction_windows(cps: List[int], T: int, n_min: int):
 
 # ── Metric extraction ─────────────────────────────────────────────────────────
 
+def _mean_skeleton_f1(structs) -> float:
+    """Orientation-free F1 of each window against its aligned true regime, averaged
+    (same windows as mean_struct_f1); comparable with the CD-NOD baseline."""
+    from cdnod_baseline import skeleton_prf
+    vals = [skeleton_prf(s.adjacency_matrix, s.true_adjacency_matrix)["F1"]
+            for s in structs if getattr(s, "true_adjacency_matrix", None) is not None]
+    return round(float(np.mean(vals)), 3) if vals else float("nan")
+
+
 def _extract_metrics(
     scenario_id: str,
     p: int,
@@ -243,6 +252,7 @@ def _extract_metrics(
             "mean_struct_recall":    round(np.mean([m["Recall"]         for m in metrics_list]), 3),
         }
         cm_struct["cm_norm_shd_per_regime"] = ";".join(str(round(m["normalized_shd"], 3)) for m in metrics_list)
+        cm_struct["mean_skeleton_f1"] = _mean_skeleton_f1(structs)
     else:
         cm_struct = {k: np.nan for k in (
             "n_structures", "mean_shd", "mean_norm_shd",
@@ -289,6 +299,7 @@ def _extract_metrics(
                 ablation_out[f"{method}_mean_precision"] = round(np.mean([m["Precision"]      for m in metrics_m]), 3)
                 ablation_out[f"{method}_mean_recall"]    = round(np.mean([m["Recall"]         for m in metrics_m]), 3)
                 ablation_out[f"{method}_norm_shd_per_regime"] = ";".join(str(round(m["normalized_shd"], 3)) for m in metrics_m)
+                ablation_out[f"{method}_mean_skeleton_f1"] = _mean_skeleton_f1(structs_m)
             else:
                 for sfx in ("mean_shd", "mean_norm_shd", "mean_f1", "mean_precision", "mean_recall"):
                     ablation_out[f"{method}_{sfx}"] = np.nan
