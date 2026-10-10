@@ -13,6 +13,9 @@ H_pipeline_before_after.png  October pipeline vs v2 + ICA-LiNGAM, three metrics 
 I_arms_by_cell.png           consensus F1 of the four arms, one panel per learner
 J_paired_forest.png          paired ΔF1 with 95% CI per cell
 K_stationary.png             stationary replication, true vs estimated prior (ICA-LiNGAM)
+L_stage1_cap.png             learner alone vs v2 vs v2 with the Stage I cap (when the v2cap rows exist)
+
+When the v2cap rows exist, H's "new pipeline" is v2 with the Stage I cap (every change).
 """
 import os
 import sys
@@ -39,7 +42,7 @@ CELLS = [("lin_laplace", "LB_v1L25_v2", "linear\nLaplace"), ("nonlin_laplace", "
 
 # categorical slots in fixed order (validated: dataviz validate_palette.js, light surface);
 # slots 3–4 sit below 3:1 on the surface, so every bar carries its value as a label
-BLUE, ORANGE, AQUA, YELLOW = "#2a78d6", "#eb6834", "#1baf7a", "#eda100"
+BLUE, ORANGE, AQUA, YELLOW, MAGENTA = "#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4"
 SURFACE, INK, INK2, GRID = "#fcfcfb", "#0b0b0b", "#52514e", "#e4e3df"
 
 plt.rcParams.update({
@@ -67,6 +70,14 @@ def _label_hbars(ax, bars, values, fmt="{:.3f}"):
                 fontsize=8.5, color=INK2)
 
 
+def _has(row):
+    return os.path.exists(os.path.join(VAL, row, "results.csv"))
+
+
+def _new_row(cell):
+    return f"P_v2cap_ica_{cell}" if _has(f"P_v2cap_ica_{cell}") else f"P_v2_ica_{cell}"
+
+
 def fig_before_after():
     metrics = [("consensus F1", "mean_struct_f1", "f1", True),
                ("windowed nSHD", "windowed_nshd_weighted", "windowed_nshd_weighted", False),
@@ -78,9 +89,11 @@ def fig_before_after():
         for cell, lbn, _ in CELLS:
             lb = _row(lbn)
             before.append(lb[col].mean())                              # October pipeline: v1 + chain + DirectLiNGAM
-            after.append(_paired(cell, lb, f"P_v2_ica_{cell}")[col].mean())
+            after.append(_paired(cell, lb, _new_row(cell))[col].mean())
         b1 = ax.bar(x - w / 2 - 0.01, before, w, color=ORANGE, label="October pipeline (v1 + chain + DirectLiNGAM)")
-        b2 = ax.bar(x + w / 2 + 0.01, after, w, color=BLUE, label="New pipeline (v2 + ICA-LiNGAM)")
+        capped = all(_has(f"P_v2cap_ica_{c}") for c, _, _ in CELLS)
+        b2 = ax.bar(x + w / 2 + 0.01, after, w, color=BLUE,
+                    label="New pipeline (v2 with Stage I cap + ICA-LiNGAM)" if capped else "New pipeline (v2 + ICA-LiNGAM)")
         top = max(before + after)
         for bars, vals in ((b1, before), (b2, after)):
             for b, v in zip(bars, vals):
@@ -183,10 +196,38 @@ def fig_stationary():
     plt.close(fig)
 
 
+def fig_stage1_cap():
+    if not all(_has(f"P_v2cap_ica_{c}") and _has(f"P_v2cap_{c}") for c, _, _ in CELLS):
+        return None
+    series = [("learner alone", None, YELLOW), ("v2", "P_v2", BLUE), ("v2 with Stage I cap", "P_v2cap", MAGENTA)]
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4.4), sharey=True)
+    for ax, (learner, suffix, alone_col) in zip(axes, [("ICA-LiNGAM", "_ica", "icalingam_mean_f1"),
+                                                       ("DirectLiNGAM", "", "directlingam_mean_f1")]):
+        h = 0.25
+        ys = np.arange(len(CELLS))[::-1]
+        for i, (lab, prefix, col) in enumerate(series):
+            vals = []
+            for cell, lbn, _ in CELLS:
+                lb = _row(lbn)
+                vals.append(lb[alone_col].mean() if prefix is None else _paired(cell, lb, f"{prefix}{suffix}_{cell}").mean_struct_f1.mean())
+            bars = ax.barh(ys + (1 - i) * (h + 0.012), vals, h, color=col, label=lab)
+            _label_hbars(ax, bars, vals)
+        ax.set_yticks(ys, [c[2].replace("\n", " / ") for c in CELLS])
+        ax.set_xlim(0, 1.08); ax.set_xlabel("consensus F1"); ax.set_title(learner, loc="left"); ax.grid(axis="y", visible=False)
+    axes[0].legend(loc="upper left", bbox_to_anchor=(0, -0.13), ncol=3, fontsize=9.5)
+    fig.suptitle("Effect of the Stage I degree cap, same windows, 600 paired scenarios per cell", x=0.01, ha="left",
+                 fontsize=12, fontweight="bold")
+    fig.tight_layout(rect=(0, 0.03, 1, 0.95))
+    fig.savefig(os.path.join(OUT, "L_stage1_cap.png"), dpi=200)
+    plt.close(fig)
+    return "L_stage1_cap.png"
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     fig_before_after(); fig_arms(); fig_forest(); fig_stationary()
-    for f in ("H_pipeline_before_after.png", "I_arms_by_cell.png", "J_paired_forest.png", "K_stationary.png"):
+    extra = fig_stage1_cap()
+    for f in ("H_pipeline_before_after.png", "I_arms_by_cell.png", "J_paired_forest.png", "K_stationary.png") + ((extra,) if extra else ()):
         print(os.path.join(OUT, f))
 
 

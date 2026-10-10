@@ -143,7 +143,9 @@ def benchmark_v2_summary(val):
     variants = [("v1 + DL, cold (no chain)",  "P_cold_"),  ("v1 + ICA, cold (no chain)",  "P_cold_ica_"),
                 ("v1 + ICA, chain prior",      "P_chain_ica_"),
                 ("lite + DL, cold",            "P_lite_"),  ("lite + ICA, cold",            "P_lite_ica_"),
-                ("v2 + DL, cold",              "P_v2_"),    ("v2 + ICA, cold",              "P_v2_ica_")]
+                ("v2 + DL, cold",              "P_v2_"),    ("v2 + ICA, cold",              "P_v2_ica_"),
+                ("litecap + ICA, cold",        "P_litecap_ica_"),
+                ("v2cap + DL, cold",           "P_v2cap_"), ("v2cap + ICA, cold",           "P_v2cap_ica_")]
     print_block("BENCHMARK V2  (same 600 scenario ids per cell; cold start, no bootstrap; corrected convention)")
     for label, dname, lbname, cell in cells:
         d = load(os.path.join(val, dname, "results.csv")); lb = load(os.path.join(val, lbname, "results.csv"))

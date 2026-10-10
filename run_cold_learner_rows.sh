@@ -48,6 +48,9 @@ for c in $CELLS; do
             run_row "$ds" "P_v2_ica_$c"    --prior_mode cold --transform v2 --learner icalingam ;;
       lite) run_row "$ds" "P_lite_$c"      --prior_mode cold --transform lite
             run_row "$ds" "P_lite_ica_$c"  --prior_mode cold --transform lite --learner icalingam ;;
+      v2cap)   run_row "$ds" "P_v2cap_ica_$c"   --prior_mode cold --transform v2cap   --learner icalingam
+               run_row "$ds" "P_v2cap_$c"       --prior_mode cold --transform v2cap ;;
+      litecap) run_row "$ds" "P_litecap_ica_$c" --prior_mode cold --transform litecap --learner icalingam ;;
       *) echo "unknown arm $arm" >&2; exit 1 ;;
     esac
   done

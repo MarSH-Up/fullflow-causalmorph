@@ -288,9 +288,10 @@ Four cells (linear/nonlinear × Laplace/Gaussian) of the 18,000-scenario grid, t
 
 | arm | configuration | gives |
 |---|---|---|
-| `main` | v2 + ICA-LiNGAM, cold prior, ablation on | the proposed pipeline, plus ICA-LiNGAM and DirectLiNGAM alone on the same windows |
-| `lite` | v2 with Stage II off + ICA-LiNGAM | isolates the new Stage II |
+| `main` | v2 with the Stage I cap (`--transform v2cap`) + ICA-LiNGAM, cold prior, ablation on | the proposed pipeline with every change, plus ICA-LiNGAM and DirectLiNGAM alone on the same windows |
+| `lite` | the same with Stage II off (`litecap`) + ICA-LiNGAM | isolates the new Stage II |
 | `v1` | published CausalMorph + chain prior + DirectLiNGAM | the October pipeline, corrected convention ("before") |
+| `v2` (optional) | v2 without the Stage I cap + ICA-LiNGAM | isolates the Stage I cap; add with `ARMS="main lite v1 v2"` (+4 runs) |
 
 Shared: v1L, γ 2.5, no hybrid, no bootstrap, no overlap. Arms run `main → lite → v1` across all cells.
 

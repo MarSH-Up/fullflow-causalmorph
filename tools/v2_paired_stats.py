@@ -35,6 +35,13 @@ def main():
                  ("lite+ICA vs ICA alone", col(f"P_lite_ica_{cell}"), L.icalingam_mean_f1),
                  ("v2+ICA vs v1+ICA", col(f"P_v2_ica_{cell}"), col(f"P_cold_ica_{cell}")),
                  ("v2+ICA vs lite+ICA", col(f"P_v2_ica_{cell}"), col(f"P_lite_ica_{cell}"))]
+        if os.path.exists(os.path.join(VAL, f"P_v2cap_ica_{cell}", "results.csv")):
+            comps += [("v2cap+ICA vs ICA alone", col(f"P_v2cap_ica_{cell}"), L.icalingam_mean_f1),
+                      ("v2cap+DL vs DL alone", col(f"P_v2cap_{cell}"), L.directlingam_mean_f1),
+                      ("v2cap+ICA vs v2+ICA (Stage I cap)", col(f"P_v2cap_ica_{cell}"), col(f"P_v2_ica_{cell}"))]
+        if os.path.exists(os.path.join(VAL, f"P_litecap_ica_{cell}", "results.csv")):
+            comps += [("litecap+ICA vs ICA alone", col(f"P_litecap_ica_{cell}"), L.icalingam_mean_f1),
+                      ("v2cap+ICA vs litecap+ICA", col(f"P_v2cap_ica_{cell}"), col(f"P_litecap_ica_{cell}"))]
         for lab, a, b in comps:
             rows.append((cell, lab) + paired_stats(a, b))
     df = pd.DataFrame(rows, columns=["cell", "comparison", "n", "dF1", "ci_lo", "ci_hi", "p_wilcoxon",

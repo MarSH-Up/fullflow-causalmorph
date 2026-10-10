@@ -9,13 +9,15 @@
 #   lin_normal       linear      normal    datasets_full_lin_normal/
 #   nonlin_normal    nonlinear   normal    datasets_full_nonlin_normal/
 #
-#   arm    configuration                                         what it gives
-#   main   CausalMorph v2 + ICA-LiNGAM, cold prior, ablation on  the proposed pipeline, plus
-#                                                                DirectLiNGAM and ICA-LiNGAM alone
-#                                                                on the same windows
-#   lite   v2 with Stage II off + ICA-LiNGAM, cold prior         isolates the new Stage II
-#   v1     published CausalMorph + chain prior + DirectLiNGAM    the October pipeline, corrected
-#                                                                convention, seeded ("before")
+#   arm    configuration                                          what it gives
+#   main   v2 with the Stage I cap (v2cap) + ICA-LiNGAM, cold     the proposed pipeline with every
+#          prior, ablation on                                     change, plus DirectLiNGAM and
+#                                                                 ICA-LiNGAM alone on the same windows
+#   lite   v2cap with Stage II off (litecap) + ICA-LiNGAM         isolates the new Stage II
+#   v1     published CausalMorph + chain prior + DirectLiNGAM     the October pipeline, corrected
+#                                                                 convention, seeded ("before")
+#   v2     v2 without the Stage I cap + ICA-LiNGAM (optional,     isolates the Stage I cap
+#          not in the default ARMS)
 #
 # Shared by every arm: v1L detector, gamma 2.5, no hybrid, no bootstrap, no
 # window overlap. Arms run in the order main → lite → v1 across all cells, so
@@ -28,6 +30,7 @@
 #   ./run_full_experiments.sh
 #   WORKERS=24 ./run_full_experiments.sh
 #   CELLS="lin_laplace lin_normal" ARMS="main" ./run_full_experiments.sh
+#   ARMS="main lite v1 v2" ./run_full_experiments.sh                      # also measure the Stage I cap
 #   SCENARIO_IDS_FILE=ids.txt OUT=/tmp/smoke DATA_PREFIX=/tmp/smoke/ds_ ./run_full_experiments.sh   # restricted run
 #
 # Detached (server):
@@ -70,10 +73,11 @@ gen_flags () {
 
 arm_flags () {
   case "$1" in
-    main) echo "--transform v2   --learner icalingam   --prior_mode cold" ;;
-    lite) echo "--transform lite --learner icalingam   --prior_mode cold  --no_ablation" ;;
-    v1)   echo "--transform v1   --learner directlingam --prior_mode chain --no_ablation" ;;
-    *) echo "unknown arm '$1' (use main lite v1)" >&2; exit 1 ;;
+    main) echo "--transform v2cap   --learner icalingam    --prior_mode cold" ;;
+    lite) echo "--transform litecap --learner icalingam    --prior_mode cold  --no_ablation" ;;
+    v1)   echo "--transform v1      --learner directlingam --prior_mode chain --no_ablation" ;;
+    v2)   echo "--transform v2      --learner icalingam    --prior_mode cold  --no_ablation" ;;
+    *) echo "unknown arm '$1' (use main lite v1 v2)" >&2; exit 1 ;;
   esac
 }
 
@@ -96,13 +100,25 @@ run_arm () {
   local cell="$1" arm="$2" ds dir t0; ds="$(dataset_for "$cell")"; dir="$OUT/$cell/$arm"; t0=$SECONDS
   echo "== $cell / $arm  $(date '+%F %H:%M')  (done so far: $(n_rows "$dir/results.csv")) =="
   local ids=(); [ -n "$SCENARIO_IDS_FILE" ] && ids=(--scenario_ids_file "$SCENARIO_IDS_FILE")
+  # The runner's exit status is checked explicitly: a failed or refused run
+  # (e.g. --resume over a file written with another --transform) stops the
+  # driver instead of being masked by the log filters.
+  local status
+  set +e
   # shellcheck disable=SC2046
   $PYTHON -u run_experiments.py --dataset_dir "$ds" --output_dir "$dir" \
       --detector v1L --corr_gamma 2.5 --no-hybrid --chain_prior_threshold 0.05 \
       --bootstrap_n 0 --window_overlap 0.0 \
       $(arm_flags "$arm") "${ids[@]}" \
       --workers "$WORKERS" --batch_size "$BATCH_SIZE" --resume 2>&1 \
-    | grep -vE "^  \[" | tee -a "$LOG/${cell}_${arm}.log" | grep -E "Final save|succeeded|ERROR|Traceback|error:" || true
+    | grep -vE "^  \[" | tee -a "$LOG/${cell}_${arm}.log" | grep -E "Final save|succeeded|ERROR|Traceback|error:"
+  status=${PIPESTATUS[0]}
+  set -e
+  if [ "$status" -ne 0 ]; then
+    echo "ERROR: $cell / $arm stopped (run_experiments exit $status). Last lines of $LOG/${cell}_${arm}.log:" >&2
+    tail -3 "$LOG/${cell}_${arm}.log" >&2
+    exit 1
+  fi
   echo "  -> $(n_rows "$dir/results.csv") rows, $(( (SECONDS - t0) / 60 )) min"
 }
 

@@ -2,11 +2,12 @@
 """
 Analysis of the full CausalMorph v2 experiments (run_full_experiments.sh).
 
-Layout read: <root>/<cell>/<arm>/results.csv, arms main | lite | v1.
-  main: v2 + ICA-LiNGAM (mean_struct_*), with ICA-LiNGAM alone (icalingam_*) and
-        DirectLiNGAM alone (directlingam_*) on the same windows
-  lite: v2 with Stage II off + ICA-LiNGAM (mean_struct_*)
+Layout read: <root>/<cell>/<arm>/results.csv, arms main | lite | v1 | v2.
+  main: v2 with the Stage I cap + ICA-LiNGAM (mean_struct_*), with ICA-LiNGAM
+        alone (icalingam_*) and DirectLiNGAM alone (directlingam_*) on the same windows
+  lite: the same with Stage II off + ICA-LiNGAM (mean_struct_*)
   v1:   published CausalMorph + chain prior + DirectLiNGAM (mean_struct_*)
+  v2:   optional, v2 without the Stage I cap + ICA-LiNGAM (mean_struct_*)
 
 Writes to <root>/analysis/: arms.csv, paired.csv, breakdown.csv, detection.csv
 and figures H_pipeline_before_after.png, I_arms_by_cell.png, J_paired_forest.png.
@@ -31,6 +32,10 @@ from v2_paired_stats import paired_stats  # noqa: E402
 
 CELLS = [("lin_laplace", "linear / Laplace"), ("nonlin_laplace", "nonlinear / Laplace"),
          ("lin_normal", "linear / Gaussian"), ("nonlin_normal", "nonlinear / Gaussian")]
+NEW = "v2 + ICA-LiNGAM"                      # with the Stage I cap: every change
+LITE = "lite + ICA-LiNGAM"
+OCT = "October pipeline (v1 + chain + DirectLiNGAM)"
+UNCAPPED = "v2 without Stage I cap + ICA-LiNGAM"
 METRICS = [("F1", "mean_struct_f1", "mean_f1"), ("P", "mean_struct_precision", "mean_precision"),
            ("R", "mean_struct_recall", "mean_recall"), ("wnSHD", "windowed_nshd_weighted", "windowed_nshd_weighted"),
            ("trF1", "transition_f1", "transition_f1")]
@@ -49,12 +54,12 @@ def series(root, cell):
     def learner(prefix):
         return pd.DataFrame({k: main[f"{prefix}_{suffix}"] for k, _, suffix in METRICS if f"{prefix}_{suffix}" in main})
 
-    out = {"v2 + ICA-LiNGAM": own(main)}
+    out = {NEW: own(main)}
     if "icalingam_mean_f1" in main:
         out["ICA-LiNGAM alone"] = learner("icalingam")
     if "directlingam_mean_f1" in main:
         out["DirectLiNGAM alone"] = learner("directlingam")
-    for arm, name in (("lite", "lite + ICA-LiNGAM"), ("v1", "October pipeline (v1 + chain + DirectLiNGAM)")):
+    for arm, name in (("lite", LITE), ("v1", OCT), ("v2", UNCAPPED)):
         d = load(os.path.join(root, cell, arm, "results.csv"))
         if d is not None and len(d):
             out[name] = own(d)
@@ -87,23 +92,25 @@ def main():
                              over=float((main_df.n_structures > main_df.n_regimes).mean())))
         for name, d in s.items():
             arms_rows.append(dict(cell=cell, arm=name, n=int(d.F1.notna().sum()), **{k: float(d[k].mean()) for k in d}))
-        comps = [("v2 vs ICA alone", "v2 + ICA-LiNGAM", "ICA-LiNGAM alone"),
-                 ("lite vs ICA alone", "lite + ICA-LiNGAM", "ICA-LiNGAM alone"),
-                 ("v2 vs lite (Stage II effect)", "v2 + ICA-LiNGAM", "lite + ICA-LiNGAM"),
-                 ("v2 vs October pipeline", "v2 + ICA-LiNGAM", "October pipeline (v1 + chain + DirectLiNGAM)")]
+        comps = [("v2 vs ICA alone", NEW, "ICA-LiNGAM alone"),
+                 ("lite vs ICA alone", LITE, "ICA-LiNGAM alone"),
+                 ("v2 vs lite (Stage II effect)", NEW, LITE),
+                 ("v2 vs October pipeline", NEW, OCT),
+                 ("Stage I cap effect (v2 vs uncapped v2)", NEW, UNCAPPED)]
         for lab, x, y in comps:
             if x in s and y in s:
                 n, dm, lo, hi, p, w, l, t, rb = paired_stats(s[x].F1, s[y].F1)
                 paired_rows.append(dict(cell=cell, comparison=lab, n=n, dF1=dm, ci_lo=lo, ci_hi=hi, p_wilcoxon=p,
                                         win=w, loss=l, tie=t, rank_biserial=rb))
         if "ICA-LiNGAM alone" in s:
-            diff = (s["v2 + ICA-LiNGAM"].F1 - s["ICA-LiNGAM alone"].F1).rename("dF1")
+            diff = (s[NEW].F1 - s["ICA-LiNGAM alone"].F1).rename("dF1")
             for factor in ("p", "n_regimes", "samples_regime"):
                 for lvl, g in pd.concat([diff, main_df[factor]], axis=1).dropna().groupby(factor):
                     break_rows.append(dict(cell=cell, factor=factor, level=lvl, n=len(g), dF1=float(g.dF1.mean()),
                                            win=int((g.dF1 > 0).sum()), loss=int((g.dF1 < 0).sum())))
-        fails = {arm: n_failed(root, cell, arm) for arm in ("main", "lite")}
-        print(f"\n{label}  (scenarios: {len(main_df)};  transform fallbacks main={fails['main']} lite={fails['lite']})")
+        fails = {arm: n_failed(root, cell, arm) for arm in ("main", "lite", "v2")}
+        print(f"\n{label}  (scenarios: {len(main_df)};  transform fallbacks "
+              + " ".join(f"{k}={v}" for k, v in fails.items() if v is not None) + ")")
         print(f"  detection v1L: P={P:.3f} R={R:.3f} F1={F:.3f}")
         print(pd.DataFrame([r for r in arms_rows if r["cell"] == cell]).drop(columns="cell")
               .to_string(index=False, float_format=lambda v: f"{v:.3f}"))
@@ -141,7 +148,6 @@ def figures(data, paired, out):
                          "legend.frameon": False})
     cells = [(c, l) for c, l in CELLS if c in data]
     ticks = [l.replace(" / ", "\n") for _, l in cells]
-    OCT, NEW = "October pipeline (v1 + chain + DirectLiNGAM)", "v2 + ICA-LiNGAM"
 
     if all(OCT in data[c] for c, _ in cells):
         fig, axes = plt.subplots(1, 3, figsize=(13, 4.6))
@@ -152,7 +158,7 @@ def figures(data, paired, out):
             before = [data[c][OCT][m].mean() for c, _ in cells]; after = [data[c][NEW][m].mean() for c, _ in cells]
             top = max(before + after)
             for xs, vals, col, lab in ((x - w / 2 - 0.01, before, ORANGE, "October pipeline (v1 + chain + DirectLiNGAM)"),
-                                       (x + w / 2 + 0.01, after, BLUE, "New pipeline (v2 + ICA-LiNGAM)")):
+                                       (x + w / 2 + 0.01, after, BLUE, "New pipeline (v2 with Stage I cap + ICA-LiNGAM)")):
                 bars = ax.bar(xs, vals, w, color=col, label=lab)
                 for b_, v in zip(bars, vals):
                     ax.text(b_.get_x() + b_.get_width() / 2, v + top * 0.015, f"{v:.2f}", ha="center", fontsize=8.5,
@@ -164,7 +170,7 @@ def figures(data, paired, out):
         fig.tight_layout(rect=(0, 0.07, 1, 0.95)); fig.savefig(os.path.join(out, "H_pipeline_before_after.png"), dpi=200)
         plt.close(fig)
 
-    arms = [(NEW, BLUE), ("lite + ICA-LiNGAM", AQUA), ("ICA-LiNGAM alone", YELLOW), (OCT, ORANGE)]
+    arms = [(NEW, BLUE), (LITE, AQUA), ("ICA-LiNGAM alone", YELLOW), (OCT, ORANGE)]
     fig, ax = plt.subplots(figsize=(10, 5))
     h = 0.19; ys = np.arange(len(cells))[::-1]
     for i, (name, col) in enumerate(arms):
