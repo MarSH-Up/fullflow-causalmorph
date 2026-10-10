@@ -9,8 +9,9 @@ Layout read: <root>/<cell>/<arm>/results.csv, arms main | lite | v1 | v2.
   v1:   published CausalMorph + chain prior + DirectLiNGAM (mean_struct_*)
   v2:   optional, v2 without the Stage I cap + ICA-LiNGAM (mean_struct_*)
 
-Writes to <root>/analysis/: arms.csv, paired.csv, breakdown.csv, detection.csv
-and figures H_pipeline_before_after.png, I_arms_by_cell.png, J_paired_forest.png.
+Writes to <root>/analysis/: arms.csv, paired.csv and breakdown.csv (both windowed
+nSHD and consensus F1, column `metric`), detection.csv, and figures
+H_pipeline_before_after.png, I_arms_by_cell[_wnshd].png, J_paired_forest[_wnshd].png.
 Cells or arms that have not run yet are skipped, so it can be run mid-way.
 
     python tools/analyze_full_v2.py --root results/full_v2
@@ -97,17 +98,19 @@ def main():
                  ("v2 vs lite (Stage II effect)", NEW, LITE),
                  ("v2 vs October pipeline", NEW, OCT),
                  ("Stage I cap effect (v2 vs uncapped v2)", NEW, UNCAPPED)]
-        for lab, x, y in comps:
-            if x in s and y in s:
-                n, dm, lo, hi, p, w, l, t, rb = paired_stats(s[x].F1, s[y].F1)
-                paired_rows.append(dict(cell=cell, comparison=lab, n=n, dF1=dm, ci_lo=lo, ci_hi=hi, p_wilcoxon=p,
-                                        win=w, loss=l, tie=t, rank_biserial=rb))
-        if "ICA-LiNGAM alone" in s:
-            diff = (s[NEW].F1 - s["ICA-LiNGAM alone"].F1).rename("dF1")
-            for factor in ("p", "n_regimes", "samples_regime"):
-                for lvl, g in pd.concat([diff, main_df[factor]], axis=1).dropna().groupby(factor):
-                    break_rows.append(dict(cell=cell, factor=factor, level=lvl, n=len(g), dF1=float(g.dF1.mean()),
-                                           win=int((g.dF1 > 0).sum()), loss=int((g.dF1 < 0).sum())))
+        for metric in ("wnSHD", "F1"):          # windowed nSHD first: the headline metric (lower is better)
+            for lab, x, y in comps:
+                if x in s and y in s:
+                    n, dm, lo, hi, p, w, l, t, rb = paired_stats(s[x][metric], s[y][metric])
+                    paired_rows.append(dict(metric=metric, cell=cell, comparison=lab, n=n, delta=dm, ci_lo=lo,
+                                            ci_hi=hi, p_wilcoxon=p, higher=w, lower=l, tie=t, rank_biserial=rb))
+            if "ICA-LiNGAM alone" in s:
+                diff = (s[NEW][metric] - s["ICA-LiNGAM alone"][metric]).rename("delta")
+                for factor in ("p", "n_regimes", "samples_regime"):
+                    for lvl, g in pd.concat([diff, main_df[factor]], axis=1).dropna().groupby(factor):
+                        break_rows.append(dict(metric=metric, cell=cell, factor=factor, level=lvl, n=len(g),
+                                               delta=float(g.delta.mean()), higher=int((g.delta > 0).sum()),
+                                               lower=int((g.delta < 0).sum())))
         fails = {arm: n_failed(root, cell, arm) for arm in ("main", "lite", "v2")}
         print(f"\n{label}  (scenarios: {len(main_df)};  transform fallbacks "
               + " ".join(f"{k}={v}" for k, v in fails.items() if v is not None) + ")")
@@ -119,17 +122,22 @@ def main():
     pd.DataFrame(paired_rows).to_csv(os.path.join(out, "paired.csv"), index=False)
     pd.DataFrame(break_rows).to_csv(os.path.join(out, "breakdown.csv"), index=False)
     pd.DataFrame(det_rows).to_csv(os.path.join(out, "detection.csv"), index=False)
-    if paired_rows:
-        print("\nPaired consensus F1 (Wilcoxon signed-rank on non-zero differences, 95% bootstrap CI):")
-        print(pd.DataFrame(paired_rows).to_string(index=False, formatters={
-            "dF1": "{:+.3f}".format, "ci_lo": "{:+.3f}".format, "ci_hi": "{:+.3f}".format,
-            "p_wilcoxon": "{:.1e}".format, "rank_biserial": "{:+.2f}".format}))
-    if break_rows:
-        b = pd.DataFrame(break_rows)
-        print("\nv2 + ICA-LiNGAM minus ICA-LiNGAM alone, mean ΔF1 by factor level:")
-        for factor in ("p", "n_regimes", "samples_regime"):
-            t = b[b.factor == factor].pivot(index="level", columns="cell", values="dF1")
-            print(f"\n  by {factor}\n" + t.to_string(float_format=lambda v: f"{v:+.3f}"))
+    TXT = {"wnSHD": "windowed nSHD (lower is better: negative delta favours the first arm)",
+           "F1": "consensus F1 (higher is better)"}
+    for metric in ("wnSHD", "F1"):
+        rows = [r for r in paired_rows if r["metric"] == metric]
+        if rows:
+            f = "{:+.4f}".format if metric == "wnSHD" else "{:+.3f}".format
+            print(f"\nPaired {TXT[metric]}; Wilcoxon signed-rank on non-zero differences, 95% bootstrap CI:")
+            print(pd.DataFrame(rows).drop(columns="metric").to_string(index=False, formatters={
+                "delta": f, "ci_lo": f, "ci_hi": f, "p_wilcoxon": "{:.1e}".format, "rank_biserial": "{:+.2f}".format}))
+        brows = [r for r in break_rows if r["metric"] == metric]
+        if brows:
+            b = pd.DataFrame(brows)
+            print(f"\nv2 + ICA-LiNGAM minus ICA-LiNGAM alone, mean delta in {metric} by factor level:")
+            for factor in ("p", "n_regimes", "samples_regime"):
+                t = b[b.factor == factor].pivot(index="level", columns="cell", values="delta")
+                print(f"\n  by {factor}\n" + t.to_string(float_format=lambda v: f"{v:+.4f}"))
     if not a.no_figures and data:
         figures(data, pd.DataFrame(paired_rows), out)
     print(f"\nwritten to {out}")
@@ -170,19 +178,29 @@ def figures(data, paired, out):
         fig.tight_layout(rect=(0, 0.07, 1, 0.95)); fig.savefig(os.path.join(out, "H_pipeline_before_after.png"), dpi=200)
         plt.close(fig)
 
+    for metric, label, suffix in (("wnSHD", "windowed nSHD (lower is better)", "_wnshd"),
+                                  ("F1", "consensus F1 (higher is better)", "")):
+        _arms_and_forest(data, paired[paired.metric == metric] if len(paired) else paired, out, cells, metric, label,
+                         suffix, plt, (BLUE, ORANGE, AQUA, YELLOW, SURFACE, INK2))
+
+
+def _arms_and_forest(data, paired, out, cells, metric, label, suffix, plt, colors):
+    BLUE, ORANGE, AQUA, YELLOW, SURFACE, INK2 = colors
     arms = [(NEW, BLUE), (LITE, AQUA), ("ICA-LiNGAM alone", YELLOW), (OCT, ORANGE)]
     fig, ax = plt.subplots(figsize=(10, 5))
     h = 0.19; ys = np.arange(len(cells))[::-1]
     for i, (name, col) in enumerate(arms):
-        vals = [data[c][name].F1.mean() if name in data[c] else np.nan for c, _ in cells]
+        vals = [data[c][name][metric].mean() if name in data[c] else np.nan for c, _ in cells]
         bars = ax.barh(ys + (1.5 - i) * (h + 0.012), vals, h, color=col, label=name)
         for b_, v in zip(bars, vals):
             if not np.isnan(v):
-                ax.text(b_.get_width() + 0.008, b_.get_y() + b_.get_height() / 2, f"{v:.3f}", va="center", fontsize=8.5, color=INK2)
-    ax.set_yticks(ys, [l for _, l in cells]); ax.set_xlim(0, 1.1); ax.set_xlabel("consensus F1"); ax.grid(axis="y", visible=False)
+                ax.text(b_.get_width() * 1.01 + 0.002, b_.get_y() + b_.get_height() / 2,
+                        f"{v:.4f}" if metric == "wnSHD" else f"{v:.3f}", va="center", fontsize=8.5, color=INK2)
+    top = np.nanmax([data[c][n][metric].mean() for c, _ in cells for n, _ in arms if n in data[c]])
+    ax.set_yticks(ys, [l for _, l in cells]); ax.set_xlim(0, top * 1.22); ax.set_xlabel(label); ax.grid(axis="y", visible=False)
     ax.legend(loc="upper left", bbox_to_anchor=(0, -0.12), ncol=2, fontsize=9.5)
-    ax.set_title("Consensus F1 by arm, full grid", loc="left", fontsize=12)
-    fig.tight_layout(); fig.savefig(os.path.join(out, "I_arms_by_cell.png"), dpi=200); plt.close(fig)
+    ax.set_title(f"{label.split(' (')[0]} by arm, full grid", loc="left", fontsize=12)
+    fig.tight_layout(); fig.savefig(os.path.join(out, f"I_arms_by_cell{suffix}.png"), dpi=200); plt.close(fig)
 
     if len(paired):
         comps = [("v2 vs ICA alone", BLUE), ("lite vs ICA alone", AQUA), ("v2 vs lite (Stage II effect)", ORANGE)]
@@ -194,12 +212,12 @@ def figures(data, paired, out):
                     continue
                 r = r.iloc[0]; yy = y + (1 - i) * step
                 ax.plot([r.ci_lo, r.ci_hi], [yy, yy], color=col, lw=2, solid_capstyle="round")
-                ax.plot(r.dF1, yy, "o", ms=7, color=col, mec=SURFACE, mew=1.5, label=comp if c == cells[0][0] else None)
+                ax.plot(r.delta, yy, "o", ms=7, color=col, mec=SURFACE, mew=1.5, label=comp if c == cells[0][0] else None)
         ax.axvline(0, color=INK2, lw=1); ax.set_yticks(ys, [l for _, l in cells]); ax.grid(axis="y", visible=False)
-        ax.set_xlabel("paired ΔF1 per scenario (mean, 95% bootstrap CI)")
+        ax.set_xlabel(f"paired difference in {label} per scenario (mean, 95% bootstrap CI)")
         ax.legend(loc="upper left", bbox_to_anchor=(0, -0.14), fontsize=9.5)
-        ax.set_title("Paired differences, full grid", loc="left", fontsize=12)
-        fig.tight_layout(); fig.savefig(os.path.join(out, "J_paired_forest.png"), dpi=200); plt.close(fig)
+        ax.set_title(f"Paired differences in {label.split(' (')[0]}, full grid", loc="left", fontsize=12)
+        fig.tight_layout(); fig.savefig(os.path.join(out, f"J_paired_forest{suffix}.png"), dpi=200); plt.close(fig)
 
 
 if __name__ == "__main__":
