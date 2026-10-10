@@ -904,8 +904,8 @@ if __name__ == "__main__":
                      help="Skip the DirectLiNGAM / ICA-LiNGAM per-window baselines")
     exp.add_argument("--learner",              type=str, default="directlingam", choices=["directlingam", "icalingam"],
                      help="structure learner fitted after CausalMorph (and used for the cold prior)")
-    exp.add_argument("--transform",            type=str, default="v1", choices=["v1", "v2", "lite", "none"],
-                     help="preconditioner before the learner: v1 (published CausalMorph), v2 (gated sample-wise), lite (v2 without stage II), none")
+    exp.add_argument("--transform",            type=str, default="v1", choices=["v1", "v2", "lite", "v2cap", "litecap", "none"],
+                     help="preconditioner before the learner: v1 (published CausalMorph), v2 (gated sample-wise), lite (v2 without stage II), v2cap / litecap (v2 / lite with the Stage I degree cap), none")
     exp.add_argument("--legacy_postprocessing", action="store_true",
                      help="Pre-2026-10-06 deletion rule max(min_samples/2, 10p^2), scored before extraction (old 'before')")
     args = parser.parse_args()

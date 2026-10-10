@@ -196,5 +196,68 @@ class EndToEnd(unittest.TestCase):
         self.assertLessEqual(rev, 1)
 
 
+
+def _five_parent_linear(n, seed, noise="laplace"):
+    """Child of five parents, purely linear; returns X and the [to, from] adjacency v2 reads."""
+    rng = np.random.default_rng(seed)
+    P = rng.laplace(size=(n, 5)) if noise == "laplace" else rng.normal(size=(n, 5))
+    e = rng.laplace(size=n) if noise == "laplace" else rng.normal(size=n)
+    y = P @ rng.uniform(0.5, 1.0, 5) + e
+    names = [f"P{i}" for i in range(5)] + ["Y"]
+    X = pd.DataFrame(np.c_[P, y], columns=names)
+    A = pd.DataFrame(0.0, index=names, columns=names)
+    A.loc[[f"P{i}" for i in range(5)], "Y"] = 1.0                   # [from, to]
+    return X, _cm_adj(A)
+
+
+class StageOneCap(unittest.TestCase):
+    """stage1_cap: Stage I's polynomial degree is capped so the number of
+    polynomial features stays at or below n/10 (at least degree 1)."""
+
+    def test_max_degree_for(self):
+        from core.causalmorph_v2 import _max_degree_for
+        self.assertEqual(_max_degree_for(160, 5), 1)      # degree 2 has 20 features > 16
+        self.assertEqual(_max_degree_for(320, 5), 2)      # 20 <= 32; degree 3 has 55
+        self.assertEqual(_max_degree_for(30, 5), 1)       # floor
+        self.assertEqual(_max_degree_for(5000, 1), 4)     # ceiling = taylor_linearize's default
+        self.assertEqual(_max_degree_for(5000, 3), 4)     # degree 4 with 3 parents: 34 features
+        self.assertEqual(_max_degree_for(250, 1), 4)
+
+    def test_cap_off_is_the_default_and_unchanged(self):
+        from core.causalmorph_v2 import causalmorph_v2
+        X, A = _five_parent_linear(80, 0)
+        a = causalmorph_v2(X, list(range(6)), A)
+        b = causalmorph_v2(X, list(range(6)), A, stage1_cap=False)
+        np.testing.assert_array_equal(a.values, b.values)
+
+    def test_cap_keeps_short_linear_windows_near_identity(self):
+        # reviewer's measurement: uncapped, median corr(output, original) ~0.72 at n = 40-80
+        from core.causalmorph_v2 import causalmorph_v2
+        capped, uncapped = [], []
+        for seed in range(10):
+            X, A = _five_parent_linear(80, seed)
+            c = causalmorph_v2(X, list(range(6)), A, stage1_cap=True)
+            u = causalmorph_v2(X, list(range(6)), A)
+            capped.append(np.corrcoef(c["Y"], X["Y"])[0, 1])
+            uncapped.append(np.corrcoef(u["Y"], X["Y"])[0, 1])
+        self.assertGreater(np.median(capped), 0.99)
+        self.assertGreater(np.median(capped), np.median(uncapped))
+
+    def test_cap_does_not_bind_on_long_windows(self):
+        from core.causalmorph_v2 import causalmorph_v2
+        X, A, _ = _chain(n=3000, noise="normal")
+        a = causalmorph_v2(X, [0, 1, 2], _cm_adj(A))
+        b = causalmorph_v2(X, [0, 1, 2], _cm_adj(A), stage1_cap=True)
+        np.testing.assert_array_equal(a.values, b.values)
+
+    def test_details_record_the_degree_cap(self):
+        from core.causalmorph_v2 import causalmorph_v2
+        X, A = _five_parent_linear(80, 0)
+        _, det = causalmorph_v2(X, list(range(6)), A, stage1_cap=True, return_details=True)
+        self.assertEqual(det["Y"]["max_degree"], 1)
+        _, det = causalmorph_v2(X, list(range(6)), A, return_details=True)
+        self.assertEqual(det["Y"]["max_degree"], 4)
+
+
 if __name__ == "__main__":
     unittest.main()

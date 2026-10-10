@@ -18,6 +18,7 @@ the downstream learner sees are mutually consistent.  Nothing random is
 drawn.  Adjacency layout is the one v1 reads: parents of node i are the
 non-zeros of row i.
 """
+from math import comb
 from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
@@ -29,6 +30,22 @@ from .causalmorph_algorithm import taylor_linearize
 
 _EPS_VAR = 1e-8
 _MIN_ROWS = 20   # below this Stage I over-fits and the gate is meaningless
+_STAGE1_MAX_DEGREE = 4     # taylor_linearize's own default ceiling
+_STAGE1_FEATURE_RATIO = 0.1
+
+
+def _max_degree_for(n: int, k: int, ratio: float = _STAGE1_FEATURE_RATIO, ceiling: int = _STAGE1_MAX_DEGREE) -> int:
+    """
+    Largest polynomial degree d <= ceiling whose feature count C(k+d, d) - 1
+    (k parents, no bias) stays at or below ratio * n; at least 1. Without it,
+    MDL picks degree > 1 on short windows with several parents even when the
+    mechanism is linear, and Stage I drifts away from the identity.
+    """
+    best = 1
+    for d in range(1, ceiling + 1):
+        if comb(k + d, d) - 1 <= ratio * n:
+            best = d
+    return best
 
 
 def _rank_map_to_laplace(eps: np.ndarray) -> np.ndarray:
@@ -73,7 +90,14 @@ def causalmorph_v2(
     stage2: str = "rankmap",
     gate_alpha: float = 0.01,
     return_details: bool = False,
+    stage1_cap: bool = False,
 ) -> Union[pd.DataFrame, Tuple[pd.DataFrame, Dict[str, dict]]]:
+    """
+    stage1_cap: cap Stage I's polynomial degree with _max_degree_for(n, k) so
+    the polynomial has at most n/10 features. Off by default (the behaviour
+    reported in §14 of the improvement plan); the pipeline exposes it as the
+    v2cap / litecap transforms.
+    """
     if stage2 not in ("rankmap", "off"):
         raise ValueError(f"stage2 must be 'rankmap' or 'off', got {stage2!r}")
     var_names = list(X.columns)
@@ -88,8 +112,9 @@ def causalmorph_v2(
         parents = np.where(adj[idx, :] != 0)[0]
         if len(parents) == 0:
             continue                                        # root: untouched, not reported
+        max_degree = _max_degree_for(n, len(parents)) if stage1_cap else _STAGE1_MAX_DEGREE
         rec = {"gated": False, "jb_p": float("nan"), "residual_before": None,
-               "residual_after": None, "skipped": None}
+               "residual_after": None, "skipped": None, "max_degree": max_degree}
         details[name] = rec
         y = X_vals[:, idx]
         P = X_new[:, parents]                                # transformed parents
@@ -99,7 +124,7 @@ def causalmorph_v2(
             rec["skipped"] = "constant_parent"; continue
         try:
             P_scaled = StandardScaler().fit_transform(P)
-            y_lin = taylor_linearize(P_scaled, y)
+            y_lin = taylor_linearize(P_scaled, y, max_degree=max_degree)
         except Exception as exc:                             # noqa: BLE001 — v1 behaviour
             rec["skipped"] = f"stage1:{type(exc).__name__}"; continue
         eps = y - y_lin

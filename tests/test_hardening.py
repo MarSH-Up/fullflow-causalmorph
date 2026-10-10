@@ -788,5 +788,40 @@ class TransformOption(unittest.TestCase):
         self.assertFalse(ok.transform_failed)
 
 
+
+class StageOneCapTransforms(unittest.TestCase):
+    """v2cap / litecap: v2 / lite with the Stage I degree cap."""
+
+    def test_dispatch(self):
+        from full_pipeline import _apply_transform, TRANSFORMS
+        from core.causalmorph_v2 import causalmorph_v2
+        from full_pipeline import _to_causalmorph
+        self.assertIn("v2cap", TRANSFORMS); self.assertIn("litecap", TRANSFORMS)
+        X, names, A = AdjacencyConvention._chain_sem()
+        df = pd.DataFrame(X[:120], columns=names)
+        got = _apply_transform("v2cap", df, [0, 1, 2], A, 0)
+        want = causalmorph_v2(df, [0, 1, 2], _to_causalmorph(A), stage2="rankmap", stage1_cap=True)
+        np.testing.assert_array_equal(got.values, want.values)
+        got = _apply_transform("litecap", df, [0, 1, 2], A, 0)
+        want = causalmorph_v2(df, [0, 1, 2], _to_causalmorph(A), stage2="off", stage1_cap=True)
+        np.testing.assert_array_equal(got.values, want.values)
+
+    def test_cli_and_row(self):
+        import subprocess
+        out = subprocess.run([sys.executable, "run_experiments.py", "--help"], capture_output=True, text=True, cwd=ROOT).stdout
+        self.assertIn("v2cap", out.split("--transform")[1][:120])
+        from run_experiments import run_loaded
+        X, names, true_cps, true_adjs, sizes = _tiny_scenario()
+        meta = dict(scenario_id="t", p=3, n_regimes=2, n_changes=1, samples_regime=500,
+                    base_pconn=0.5, noise_fraction=0.02, seed=11)
+        row = run_loaded(X, names, true_cps, true_adjs, sizes, min_samples=500, meta=meta,
+                         window_overlap=0.0, detector_version="v1L", corr_gamma=2.5, prior_mode="cold",
+                         hybrid=False, bootstrap_n=0, bootstrap_threshold=0.6, chain_prior_threshold=0.05,
+                         run_ablation=False, transform="v2cap", learner="icalingam")
+        self.assertEqual(row["status"], "ok", row.get("error_msg"))
+        self.assertEqual(row["transform"], "v2cap")
+        self.assertEqual(row["n_transform_failed"], 0)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

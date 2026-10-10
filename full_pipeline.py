@@ -69,7 +69,7 @@ class RegimeStructure:
     edge_probs: Optional[np.ndarray] = None        # per-edge bootstrap frequency, [p, p]
     prior_edge_probs: Optional[np.ndarray] = None  # soft chain prior this window received
     learner: str = "directlingam"                   # structure learner fitted after CausalMorph
-    transform: str = "v1"                           # preconditioner: v1 | v2 | lite | none
+    transform: str = "v1"                           # preconditioner: v1 | v2 | lite | v2cap | litecap | none
     transform_failed: bool = False                  # transform raised; raw window was used instead (bootstrap: any replica)
 
 
@@ -130,7 +130,7 @@ def _causalmorph_seeded(X: pd.DataFrame, causal_order, adj_truth: pd.DataFrame, 
         np.random.set_state(state)
 
 
-TRANSFORMS = ("v1", "v2", "lite", "none")
+TRANSFORMS = ("v1", "v2", "lite", "v2cap", "litecap", "none")
 
 
 def _apply_transform(transform: str, X: pd.DataFrame, causal_order, adj_truth: pd.DataFrame, seed: int) -> pd.DataFrame:
@@ -139,6 +139,8 @@ def _apply_transform(transform: str, X: pd.DataFrame, causal_order, adj_truth: p
       v1   : the published CausalMorph (seeded; see _causalmorph_seeded)
       v2   : CausalMorph v2 — gated, sample-wise, deterministic Stage II
       lite : v2 with Stage II off (linearise + orthogonalise only)
+      v2cap, litecap : v2 / lite with Stage I's polynomial degree capped so the
+             polynomial has at most n/10 features (causalmorph_v2 stage1_cap)
       none : the raw window
     adj_truth is A[from, to]; conversion to the layout the transforms read
     happens here and nowhere else.
@@ -147,9 +149,10 @@ def _apply_transform(transform: str, X: pd.DataFrame, causal_order, adj_truth: p
         return X
     if transform == "v1":
         return _causalmorph_seeded(X, causal_order, adj_truth, seed)
-    if transform in ("v2", "lite"):
+    if transform in ("v2", "lite", "v2cap", "litecap"):
         return causalmorph_v2(X, causal_order=list(causal_order), adjacency_matrix=_to_causalmorph(adj_truth),
-                              stage2=("rankmap" if transform == "v2" else "off"))
+                              stage2=("rankmap" if transform.startswith("v2") else "off"),
+                              stage1_cap=transform.endswith("cap"))
     raise ValueError(f"transform must be one of {TRANSFORMS}, got {transform!r}")
 
 
