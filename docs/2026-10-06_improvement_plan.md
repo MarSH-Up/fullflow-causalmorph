@@ -1190,3 +1190,36 @@ with small-to-moderate effect sizes ($r_{rb}$ = 0.17 and 0.24), which is the
 honest description, since with n = 600 the p-values alone say little. On
 nonlinear/Laplace the loss is significant ($r_{rb}$ = −0.45) and the same for
 lite (−0.46), i.e. a Stage I/III cost, not a Stage II one.
+
+### 14.7 The Stage I degree cap (2026-10-10)
+
+`causalmorph_v2(stage1_cap=True)` caps the MDL polynomial degree so Stage I
+uses at most $n/10$ features (at least degree 1, at most 4); the pipeline
+exposes it as `--transform v2cap` / `litecap`. On a child of five linear
+parents the uncapped output kept a median correlation with the original of
+0.79 at $n = 40$ and 0.70 at $n = 80$; capped, 0.997 and 1.000. From 320 rows
+up the cap does not bind.
+
+Benchmark v2, same 600 scenarios and windows, **windowed nSHD** (lower is
+better), mean per cell; paired difference against ICA-LiNGAM alone with 95%
+bootstrap CI (`tools/v2_paired_stats.py` → `v2_paired_stats_wnshd.csv`):
+
+| cell | ICA-LiNGAM alone | v2 + ICA | v2cap + ICA | v2cap vs alone | cap effect (v2cap vs v2) |
+|---|---|---|---|---|---|
+| linear / Laplace | 0.0421 | 0.0413 | 0.0410 | −0.0011 [−0.0020, −0.0004] | −0.0003 [−0.0006, −0.0000] |
+| nonlinear / Laplace | 0.0937 | 0.1049 | 0.1027 | +0.0090 [+0.0052, +0.0130] | −0.0022 [−0.0030, −0.0013] |
+| linear / Gaussian | 0.0680 | 0.0644 | 0.0638 | −0.0043 [−0.0076, −0.0008] | −0.0006 [−0.0010, −0.0003] |
+| nonlinear / Gaussian | 0.1349 | 0.1188 | 0.1179 | −0.0170 [−0.0237, −0.0102] | −0.0009 [−0.0016, −0.0002] |
+
+The cap lowers windowed nSHD in every cell (all four intervals exclude 0)
+and never raises it. With it, v2 + ICA-LiNGAM is better than ICA-LiNGAM
+alone in three of four cells, including the assumption-satisfying one
+(−0.0011, previously an interval touching 0), and the nonlinear / Laplace
+loss shrinks by a fifth (+0.0111 → +0.0090) without disappearing: the rest
+is the Taylor-slope substitution of §14.5, not over-fitting. The Stage II
+effect under the cap (v2cap vs litecap) is unchanged in sign and size:
+−0.0044 on linear / Gaussian, −0.0200 on nonlinear / Gaussian, zero on the
+Laplace cells. With DirectLiNGAM the cap removes the small linear / Laplace
+deficit but does not make v2 help (+0.0038 on linear / Gaussian).
+`n_transform_failed` = 0 on all 12 rows. The full-grid driver's `main` arm
+runs `v2cap` (§ RUNBOOK, "Full experiments for CausalMorph v2").
