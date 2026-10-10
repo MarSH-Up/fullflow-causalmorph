@@ -281,3 +281,39 @@ per-scenario win-rates 106/31, 113/34 and 115/33.
 > `results/v1h_subset/` is an *older* baseline (62 columns, no dynamic metrics,
 > per-regime precision 0.324). The compendium's file map calls it the baseline;
 > the one that reproduces Table 3 is `v1h_phase1` (78 columns, 0.328).
+
+## Full experiments for CausalMorph v2 (`run_full_experiments.sh`, 2026-10-10)
+
+Four cells (linear/nonlinear × Laplace/Gaussian) of the 18,000-scenario grid, three arms each:
+
+| arm | configuration | gives |
+|---|---|---|
+| `main` | v2 + ICA-LiNGAM, cold prior, ablation on | the proposed pipeline, plus ICA-LiNGAM and DirectLiNGAM alone on the same windows |
+| `lite` | v2 with Stage II off + ICA-LiNGAM | isolates the new Stage II |
+| `v1` | published CausalMorph + chain prior + DirectLiNGAM | the October pipeline, corrected convention ("before") |
+
+Shared: v1L, γ 2.5, no hybrid, no bootstrap, no overlap. Arms run `main → lite → v1` across all cells.
+
+**Disk.** `lin_laplace` uses the existing `datasets/` (19 GB). The other three cells are generated on first run into `datasets_full_<cell>/`, about 19 GB each (≈ 57 GB more). Generation is skipped when a directory already holds 18,000 scenarios.
+
+**Run (server):**
+
+```bash
+cd Full-Flow && . .venv/bin/activate
+git pull && python -m unittest tests.test_causalmorph_v2 tests.test_hardening 2>&1 | tail -2
+nohup ./run_full_experiments.sh > results/logs/full_v2_driver.log 2>&1 &
+tail -f results/logs/full_v2_driver.log
+```
+
+Overrides: `WORKERS=24`, `CELLS="lin_laplace lin_normal"`, `ARMS="main"`, `OUT=...`. Re-running resumes; `--resume` refuses a results file written with another `--transform` or `--learner`.
+
+**Budget.** On the M4 Max at 12 workers a 600-scenario row took 4–5 min, so one arm on one cell of the full grid is about 2–2.5 h there, and the 12 arm × cell runs about 25–30 h. Scale by the server's per-core speed.
+
+**Output.** `results/full_v2/<cell>/<arm>/results.csv`; `results/full_v2/analysis/` holds `arms.csv`, `paired.csv` (Wilcoxon, bootstrap CI, rank-biserial), `breakdown.csv` (ΔF1 by p, regimes and samples), `detection.csv` and figures H, I, J. `results/full_v2/summary.txt` is the printed report. The analysis can be run mid-way: `python tools/analyze_full_v2.py --root results/full_v2`.
+
+**Smoke test (4 scenarios, all cells and arms, ~3 min at 4 workers):**
+
+```bash
+head -4 results/hardening_validation/sample_ids.txt > /tmp/ids.txt
+SCENARIO_IDS_FILE=/tmp/ids.txt OUT=/tmp/smoke DATA_PREFIX=/tmp/smoke/ds_ WORKERS=4 ./run_full_experiments.sh
+```
