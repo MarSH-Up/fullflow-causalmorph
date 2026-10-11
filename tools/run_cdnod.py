@@ -11,7 +11,7 @@ consensus_f1, mean_skeleton_f1) so the two can be paired by scenario_id.
     # CD-NOD given the pipeline's detected segments as the context variable:
     python tools/run_cdnod.py ... --c_index segments --segments_from results/x/main/results.csv
 
-Appends in batches; --resume skips scenarios already in results.csv and refuses
+Appends every --batch_size results (workers never wait for a batch to finish); --resume skips scenarios already in results.csv and refuses
 a file written with another --test / --c_index / --n_sub.
 """
 import argparse
@@ -108,20 +108,29 @@ def main():
     t0, done, header = time.time(), 0, not os.path.exists(out)
     columns = None if header else list(pd.read_csv(out, nrows=0).columns)
     rows = list(index.iterrows())
+
+    def flush(buf):
+        nonlocal columns, header
+        df = pd.DataFrame(buf)
+        if columns is None:
+            columns = list(df.columns) + [c for c in ("error_msg",) if c not in df.columns]
+        df = df.reindex(columns=columns)
+        df.to_csv(out, mode="a", header=header, index=False); header = False
+        n_err = int((df.status != "ok").sum())
+        print(f"  {done}/{len(rows)}  ({(time.time() - t0) / 60:.1f} min){'  errors: ' + str(n_err) if n_err else ''}",
+              flush=True)
+
+    # Every scenario is queued at once so no worker waits for the slowest scenario of a batch
+    # (KCI time varies by an order of magnitude with p); results are appended every batch_size.
+    buf = []
     with ProcessPoolExecutor(max_workers=a.workers) as ex:
-        for start in range(0, len(rows), a.batch_size):
-            batch = rows[start:start + a.batch_size]
-            futs = [ex.submit(_job, r.scenario_id, r, a.dataset_dir, cfg, detected.get(r.scenario_id)) for _, r in batch]
-            res = [f.result() for f in as_completed(futs)]
-            df = pd.DataFrame(res)
-            if columns is None:
-                columns = list(df.columns) + [c for c in ("error_msg",) if c not in df.columns]
-            df = df.reindex(columns=columns)
-            df.to_csv(out, mode="a", header=header, index=False); header = False
-            done += len(res)
-            n_err = int((df.status != "ok").sum())
-            print(f"  {done}/{len(rows)}  ({(time.time() - t0) / 60:.1f} min){'  errors: ' + str(n_err) if n_err else ''}",
-                  flush=True)
+        futs = [ex.submit(_job, r.scenario_id, r, a.dataset_dir, cfg, detected.get(r.scenario_id)) for _, r in rows]
+        for f in as_completed(futs):
+            buf.append(f.result()); done += 1
+            if len(buf) >= a.batch_size:
+                flush(buf); buf = []
+        if buf:
+            flush(buf)
     print(f"Final save: {done} rows -> {out}", flush=True)
 
 
