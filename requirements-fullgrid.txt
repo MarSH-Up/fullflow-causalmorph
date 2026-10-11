@@ -20,3 +20,8 @@ statsmodels==0.14.4
 # Not required: cdt and numba are imported only by causalmorph/utils/metrics.py
 # and causalmorph/synthetic_pipeline_mac.py, neither of which is on the
 # run_experiments.py code path (verified by inspecting sys.modules after a run).
+
+# CD-NOD baseline (cdnod_baseline.py, tools/run_cdnod.py)
+causal-learn==0.1.4.0
+# DAGMA per-window baseline (--ablation_methods ...,dagma)
+dagma==1.1.1

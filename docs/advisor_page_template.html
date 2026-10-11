@@ -1,0 +1,175 @@
+<title>nsDCBN Hardening Results</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,500;8..60,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  /* Layout: a single reading column (≈70ch) for prose and tables; figures break out to a wider measure. */
+  :root {
+    --bg: #fbfaf7;        /* warm off-white, biased toward the orange "before" hue */
+    --fg: #1a1916;
+    --fg-2: #5a574f;
+    --muted: #8d8a80;
+    --rule: #e4e1d8;
+    --surface: #f3f1ea;
+    --accent: #2a78d6;    /* "after", the same blue as the figures */
+    --before: #eb6834;    /* "before", the same orange as the figures */
+    --good: #1f6b2a;
+    --font-display: "Source Serif 4", Georgia, "Times New Roman", serif;
+    --font-body: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+    --font-mono: "IBM Plex Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #15161a; --fg: #ecebe6; --fg-2: #b3b0a6; --muted: #817e75; --rule: #2d2f36; --surface: #1d1f25;
+      --accent: #5f9ce8; --before: #f08457; --good: #7fc78a; color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #15161a; --fg: #ecebe6; --fg-2: #b3b0a6; --muted: #817e75; --rule: #2d2f36; --surface: #1d1f25;
+    --accent: #5f9ce8; --before: #f08457; --good: #7fc78a; color-scheme: dark;
+  }
+  body { background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 16px; line-height: 1.55;
+         padding-block: 2.5rem 4rem; padding-inline: 16px; }
+  .page { max-width: 1040px; margin-inline: auto; }
+  .col { max-width: 70ch; }
+  h1, h2, h3 { font-family: var(--font-display); font-weight: 600; text-wrap: balance; line-height: 1.15; margin: 0; }
+  h1 { font-size: clamp(2rem, 4.5vw, 2.9rem); letter-spacing: -0.01em; }
+  h2 { font-size: 1.55rem; margin-top: 3rem; padding-top: 1.2rem; border-top: 1px solid var(--rule); }
+  h3 { font-size: 1.15rem; margin-top: 1.8rem; }
+  p { margin: 0.9rem 0; max-width: 70ch; }
+  .eyebrow { font-family: var(--font-mono); font-size: 0.78rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+  .lede { font-size: 1.12rem; color: var(--fg-2); max-width: 66ch; }
+  .meta { display: flex; flex-wrap: wrap; gap: 0.5rem 1.6rem; margin-top: 1.2rem; font-size: 0.9rem; color: var(--fg-2); }
+  .meta span b { color: var(--fg); font-weight: 500; }
+  figure { margin: 1.6rem 0 0.4rem; }
+  figure img { display: block; width: 100%; max-width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 6px; background: #fff; }
+  figcaption { font-size: 0.9rem; color: var(--fg-2); margin-top: 0.55rem; max-width: 80ch; }
+  figcaption b { color: var(--fg); font-weight: 500; }
+  .tablewrap { overflow-x: auto; margin: 1.2rem 0; }
+  table { border-collapse: collapse; font-size: 0.92rem; font-variant-numeric: tabular-nums; min-width: 100%; }
+  th, td { padding: 0.45rem 0.7rem; text-align: right; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+  th { font-weight: 500; color: var(--fg-2); font-size: 0.82rem; letter-spacing: 0.02em; }
+  th:first-child, td:first-child { text-align: left; }
+  td.good { color: var(--good); font-weight: 500; }
+  td.bad { color: var(--before); font-weight: 500; }
+  td.num, th.num { font-family: var(--font-mono); font-size: 0.86rem; }
+  .callout { background: var(--surface); border-left: 3px solid var(--accent); padding: 0.9rem 1.1rem; margin: 1.4rem 0; max-width: 72ch; border-radius: 0 6px 6px 0; }
+  .callout.before { border-left-color: var(--before); }
+  .callout p { margin: 0.35rem 0; }
+  .kv { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 0.8rem; margin: 1.2rem 0; }
+  .kv div { background: var(--surface); border-radius: 6px; padding: 0.8rem 0.95rem; }
+  .kv .k { font-size: 0.78rem; color: var(--muted); letter-spacing: 0.04em; text-transform: uppercase; font-family: var(--font-mono); }
+  .kv .v { font-family: var(--font-display); font-size: 1.7rem; font-weight: 600; margin-top: 0.15rem; }
+  .kv .v small { font-family: var(--font-body); font-size: 0.85rem; color: var(--fg-2); font-weight: 400; margin-left: 0.3rem; }
+  .kv .v .arrow { color: var(--muted); font-weight: 400; margin: 0 0.25rem; }
+  code { font-family: var(--font-mono); font-size: 0.86em; background: var(--surface); padding: 0.05em 0.35em; border-radius: 3px; }
+  ol, ul { max-width: 70ch; padding-left: 1.3rem; }
+  li { margin: 0.35rem 0; }
+  .toc { font-size: 0.92rem; columns: 2; column-gap: 2rem; max-width: 70ch; margin: 1.2rem 0 0; }
+  .toc a { color: var(--fg-2); text-decoration: none; display: block; padding: 0.15rem 0; }
+  .toc a:hover, .toc a:focus-visible { color: var(--accent); outline: none; text-decoration: underline; }
+  a { color: var(--accent); }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  @media (max-width: 520px) { .toc { columns: 1; } body { font-size: 15px; } }
+  @media (prefers-reduced-motion: no-preference) { a { transition: color 120ms ease; } }
+</style>
+
+<div class="page">
+  <div class="eyebrow">nsDCBN · pipeline hardening · validation on 600 stratified scenarios</div>
+  <h1>Hardening the nsDCBN pipeline: what changed, and what the numbers say now</h1>
+  <p class="lede">A re-audit of the extraction pipeline found three defects that shaped every structure number reported in October: an adjacency convention mismatch that scored reversed edges as correct, a consensus rule that returned the complete graph for half the grid, and a post-processing rule that deleted most detected change points at large <i>p</i>. This page shows the pipeline before and after on the same 600 scenarios, under the corrected scoring.</p>
+  <div class="meta">
+    <span><b>Sample</b> 60 scenarios per <i>p</i> ∈ 3…12, 20 per samples-per-regime, seed 20261006</span>
+    <span><b>Before</b> October configuration, re-scored</span>
+    <span><b>After</b> {{AFTER_LABEL}}</span>
+    <span><b>Branch</b> <code>feature/pipeline-hardening</code></span>
+  </div>
+  <nav class="toc" aria-label="Sections">
+    <a href="#summary">Summary</a>
+    <a href="#detection">1 · Change-point detection</a>
+    <a href="#convention">2 · The adjacency convention</a>
+    <a href="#structure">3 · Structure recovery</a>
+    <a href="#pieces">4 · What each piece is worth</a>
+    <a href="#causalmorph">5 · CausalMorph on this benchmark</a>
+    <a href="#next">6 · What this means for the paper</a>
+  </nav>
+
+  <h2 id="summary">Summary</h2>
+  <div class="kv">
+    <div><div class="k">detection recall</div><div class="v">{{DET_R_BEFORE}}<span class="arrow">→</span>{{DET_R_AFTER}}</div></div>
+    <div><div class="k">detection precision</div><div class="v">{{DET_P_BEFORE}}<span class="arrow">→</span>{{DET_P_AFTER}}</div></div>
+    <div><div class="k">per-regime F1 (structure)</div><div class="v">{{F1_BEFORE}}<span class="arrow">→</span>{{F1_AFTER}}</div></div>
+    <div><div class="k">windowed nSHD (lower is better)</div><div class="v">{{WN_BEFORE}}<span class="arrow">→</span>{{WN_AFTER}}</div></div>
+  </div>
+  <div class="col">
+    <p>The detector was never the weak part it looked like. Its reported recall of 0.48 was mostly a post-processing rule (<code>max(250, 10p²)</code>) that deleted every change point next to a regime shorter than that bound — from <i>p</i>&nbsp;=&nbsp;8 upward, all of them. With that rule replaced and a new change statistic (v1L), recall is {{DET_R_AFTER}} at precision {{DET_P_AFTER}}, flat across the position of the change point in the series.</p>
+    <p>The structure numbers were measured against the transpose of the truth. <code>lingam</code> returns <i>B</i>[to, from]; the generator and every metric use <i>A</i>[from, to]; nothing converted between them. The oracle-seeded pipeline produced reversed graphs that the reversed metric scored as correct, and the prior-free baselines produced correct graphs that it scored as failures. Under the corrected scoring, the plain per-window learners beat the pipeline's extraction layer, and the configuration that won in October (bootstrap at 0.60, window overlap 0.15, oracle seed, consensus at 0.20) loses on every metric to a cold start with none of those.</p>
+  </div>
+
+  <h2 id="detection">1 · Change-point detection</h2>
+  <figure><img src="{{FIG_A}}" alt="Detection precision, recall and F1 before and after; recall by change-point position; recall by number of nodes"><figcaption><b>Figure A.</b> Same 600 scenarios. Before: v1H with the October post-processing. After: v1L (Fisher-standardised max-pair statistic, per-pair robust scale re-estimated after a first pass, analytic threshold √(2 ln m) + 2.5), change points merged rather than deleted when a window is too short to fit. The positional decay (0.69 → 0.22 from the first to the sixth change point) and the collapse above <i>p</i> = 8 are gone.</figcaption></figure>
+  <div class="tablewrap">{{TABLE_DETECTION}}</div>
+  <figure><img src="{{FIG_B}}" alt="Recall as a function of matching tolerance"><figcaption><b>Figure B.</b> Localisation was already sharp: recall barely moves with tolerance in either version. The gain is in finding change points at all.</figcaption></figure>
+  <figure><img src="{{FIG_C}}" alt="Share of scenarios under-, exactly and over-segmented"><figcaption><b>Figure C.</b> Under-segmentation is the error extraction cannot repair: a window spanning two regimes is scored against one of them.</figcaption></figure>
+  <div class="col">
+    <h3>Why the old statistic decayed with position</h3>
+    <p>v1H thresholded the Frobenius norm of the correlation change over all <i>m</i> = <i>p</i>(<i>p</i>−1)/2 pairs, calibrated once on regime 0. A sparse change in 3 of 66 pairs is diluted by the estimation noise of the other 63, and the generator makes the first transition carry about twice the edge changes of later ones, so later change points sat below a threshold set on the first. v1L standardises each pair on the Fisher scale, divides by its own robust null scale (the Gaussian variance is 1.2–1.7× too small on this grid and grows with <i>p</i>), takes the maximum over pairs, and thresholds analytically. Precision is flat across <i>p</i>.</p>
+  </div>
+
+  <h2 id="convention">2 · The adjacency convention</h2>
+  <div class="col">
+    <p>Three layouts were in play and nothing converted between them:</p>
+  </div>
+  <div class="tablewrap"><table>
+    <tr><th>object</th><th>layout</th><th>where</th></tr>
+    <tr><td>ground truth, every metric</td><td class="num">A[from, to]</td><td>generator, <code>compute_shd</code>, <code>metrics.py</code></td></tr>
+    <tr><td><code>lingam</code> output</td><td class="num">B[to, from]</td><td><code>DirectLiNGAM</code>, <code>ICALiNGAM</code></td></tr>
+    <tr><td>CausalMorph prior</td><td class="num">parents of <i>i</i> read from row <i>i</i> → [to, from]</td><td><code>causalmorph_algorithm.py:202</code></td></tr>
+  </table></div>
+  <div class="col">
+    <p>Measured on grid scenarios, recall of window 0 scored as-is / scored on the transpose: oracle-seeded pipeline <b>1.00 / 0.00</b>, cold start <b>0.00 / 1.00</b>, cold start with its prior transposed <b>1.00 / 0.00</b>. The cold pipeline produced the correct graph and was scored as a complete reversal. The oracle path handed CausalMorph the truth in [from, to], which it read as the reversed graph; because its transform imposes the prior's orientation, DirectLiNGAM returned the reversed graph, which the reversed metric then scored as correct. Two errors cancelling for the seeded pipeline, compounding for the baselines.</p>
+    <div class="callout before"><p><b>What the October tables measured:</b> the pipeline's ability to recover the reverse of the true DAG, seeded with the reverse of the true prior. The 99.4% / 99.99% win-rates against DirectLiNGAM and ICA-LiNGAM invert under the corrected scoring: the baselines win.</p></div>
+    <p>The fix is one convention inside the pipeline, <i>A</i>[from, to], with explicit converters at the two library boundaries, pinned by tests on a V1 → V2 → V3 SEM where every learner now scores recall ≥ 0.5 against the truth (each was 0.0 with SHD 4: both edges missing, both reversals present).</p>
+  </div>
+
+  <h2 id="structure">3 · Structure recovery</h2>
+  <figure><img src="{{FIG_D}}" alt="Structure recovery metrics before and after"><figcaption><b>Figure D.</b> Both versions scored under the corrected convention. "Before" is the October configuration re-run on the same scenarios (oracle seed, consensus 0.20, 10p² deletion, v1H). "After" is {{AFTER_LABEL}}.</figcaption></figure>
+  <div class="tablewrap">{{TABLE_STRUCTURE}}</div>
+  <figure><img src="{{FIG_E}}" alt="Consensus recall and precision by number of extraction windows"><figcaption><b>Figure E.</b> The consensus aggregator used a Beta(1,1) prior and included an edge when its posterior mean exceeded 0.20. An edge no window voted for has posterior mean 1/(n+2), which exceeds 0.20 for one or two windows, so the consensus graph was complete for 51% of the grid (recall exactly 1.000). Under 0–1 loss the Bayes decision is 0.5, a length-weighted majority vote for every n.</figcaption></figure>
+
+  <h2 id="pieces">4 · What each piece is worth</h2>
+  <figure><img src="{{FIG_F}}" alt="Paired differences of each configuration change against the chosen configuration"><figcaption><b>Figure F.</b> Each bar is one change against the chosen configuration on the same scenarios, paired. Headroom with perfect segmentation is what better detection could still buy. The old configuration, bootstrap at 0.60 with overlap, and the CausalMorph transform with its chain prior each sit below zero: each was costing structure.</figcaption></figure>
+  <div class="tablewrap">{{TABLE_SWEEP}}</div>
+  <div class="col">
+    <p>Window overlap prepends 15% of the previous window to each window, that is, samples that belong to the previous regime by construction. In the reversed orientation this smoothed the chain; in the correct one it contaminates every fit. No bootstrap threshold recovers it: lowering the threshold trades precision for recall monotonically and nothing approaches the plain per-window fit.</p>
+  </div>
+
+  <h2 id="causalmorph">5 · CausalMorph on this benchmark</h2>
+  <div class="col">
+    <p>To separate design from a residual defect, one stationary experiment: a linear SEM with Laplace noise, <i>p</i> = 6, <i>n</i> = 1500, density 0.3, eight seeds. This is LiNGAM's own model.</p>
+  </div>
+  <div class="tablewrap"><table>
+    <tr><th></th><th class="num">precision</th><th class="num">recall</th></tr>
+    <tr><td>DirectLiNGAM raw</td><td class="num">1.000</td><td class="num">1.000</td></tr>
+    <tr><td>ICA-LiNGAM raw</td><td class="num">1.000</td><td class="num">1.000</td></tr>
+    <tr><td>DirectLiNGAM ∘ CausalMorph, prior = truth</td><td class="num bad">0.858</td><td class="num bad">0.835</td></tr>
+    <tr><td>DirectLiNGAM ∘ CausalMorph, prior = DirectLiNGAM estimate (the cold path)</td><td class="num bad">0.876</td><td class="num bad">0.853</td></tr>
+    <tr><td>DirectLiNGAM ∘ CausalMorph, prior = truth untransposed (the October path)</td><td class="num bad">0.030</td><td class="num bad">0.036</td></tr>
+    <tr><td>DirectLiNGAM ∘ CausalMorph, prior = empty</td><td class="num">1.000</td><td class="num">1.000</td></tr>
+  </table></div>
+  <div class="col">
+    <p>With the true graph as prior, CausalMorph's transform turns a perfect recovery into about 85%; with an empty prior it is the identity. The chain prior re-applies that loss window after window, which is the whole gap between the pipeline and DirectLiNGAM on the same windows. This is consistent with what CausalMorph is for: preconditioning data that violate LiNGAM's assumptions (nonlinear mechanisms, Gaussian-leaning noise). This grid is linear with Laplace innovations, where a preconditioner has nothing to fix and can only remove signal.</p>
+    <div class="callout"><p><b>Defensible claims after this audit.</b> The segmentation is the contribution, and it is now strong. On this grid the best extraction is LiNGAM per window without CausalMorph. CausalMorph's value has to be shown on a grid that violates the assumptions it was built for, which is a benchmark-design decision rather than a tuning problem.</p></div>
+  </div>
+
+  <h2 id="next">6 · What this means for the paper</h2>
+  <div class="col">
+    <ol>
+      <li>Every structure number computed before the fix, including the 180-scenario subset, the report's Table 3 and the baseline win-rates, must be recomputed; the detection numbers (v1G vs v1H) are unaffected.</li>
+      <li>The detection section can be written now from the validation sample and then confirmed on the full 18,000-scenario grid; detection-only runs take under an hour at 12 workers.</li>
+      <li>The extraction section should compare the segmentation + per-window learner against (a) one graph fitted to the whole series and (b) CD-NOD, both correctly scored. The whole-series control is on this page's final rows.</li>
+      <li>A second benchmark with nonlinear mechanisms and Gaussian noise is needed before any claim about CausalMorph inside the pipeline.</li>
+      <li>The nonstationary structure-over-time metrics need one more change: <code>transition_shd</code> is minimised by predicting no change (a missed transition is charged only the sparse true change set); <code>transition_f1</code>, the edge-set F1 of learned changes, replaces it.</li>
+    </ol>
+    <p class="eyebrow" style="margin-top:2.5rem">Reproduction</p>
+    <p>Branch <code>feature/pipeline-hardening</code>, commits through <code>{{HEAD_SHA}}</code>. Rows: <code>run_hardening_validation.sh</code>, <code>run_l3_head_to_head.sh</code>, <code>run_bootstrap_sweep.sh</code>, <code>run_final_rows.sh</code>. Figures: <code>plot_before_after.py</code>. Tests: <code>python -m unittest tests/test_hardening.py</code> (40 tests). The full write-up with every intermediate measurement is <code>docs/2026-10-06_improvement_plan.md</code>, §7–§12.</p>
+  </div>
+</div>

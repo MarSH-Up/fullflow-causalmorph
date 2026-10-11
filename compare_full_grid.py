@@ -49,7 +49,7 @@ STRATA = [("p", "by_p"), ("samples_regime", "by_samples"), ("n_regimes", "by_reg
 
 # ── loading ───────────────────────────────────────────────────────────────────
 
-def load_pair(baseline_path, winning_path):
+def load_pair(baseline_path, winning_path, dedup="first"):
     """Load both arms, keep only scenarios that succeeded in both, and align them."""
     base = pd.read_csv(baseline_path)
     win  = pd.read_csv(winning_path)
@@ -66,6 +66,18 @@ def load_pair(baseline_path, winning_path):
 
     base = base[base["status"] == "ok"]
     win  = win[win["status"] == "ok"]
+
+    # Two concurrent runs appending to the same file leave a scenario with more
+    # than one row. The pipeline is not deterministic across processes, so the
+    # copies differ; keep the first and say how many were dropped, because a
+    # duplicated index would otherwise blow the pairing up into a cross join.
+    for name, df in (("baseline", base), ("winning", win)):
+        n_dup = len(df) - df["scenario_id"].nunique()
+        if n_dup:
+            print(f"  {name:8s}: {n_dup} duplicate rows dropped "
+                  f"({df['scenario_id'].nunique()} unique scenarios kept)")
+    base = base.drop_duplicates(subset="scenario_id", keep=dedup)
+    win  = win.drop_duplicates(subset="scenario_id", keep=dedup)
 
     shared = sorted(set(base["scenario_id"]) & set(win["scenario_id"]))
     if not shared:
@@ -203,11 +215,14 @@ def main():
                     help="results.csv of the bootstrap+overlap arm")
     ap.add_argument("--out",      default=os.path.join(here, "results/full_grid_comparison"),
                     help="directory for the CSV outputs")
+    ap.add_argument("--dedup",    default="first", choices=["first", "last"],
+                    help="which copy to keep when a scenario appears more than once "
+                         "(default: first)")
     args = ap.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
     print("\nLoading:")
-    base, win = load_pair(args.baseline, args.winning)
+    base, win = load_pair(args.baseline, args.winning, args.dedup)
 
     head = headline_table(base, win)
     print_headline(head)
