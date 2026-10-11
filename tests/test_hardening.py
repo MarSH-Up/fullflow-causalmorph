@@ -858,6 +858,16 @@ class DagmaPerWindow(unittest.TestCase):
         self.assertEqual(compute_shd(s.adjacency_matrix, A)["F1"], 1.0)     # A is [from, to]
         self.assertEqual(sorted(s.causal_order), [0, 1, 2])
 
+    def test_dagma_is_scale_equivariant(self):
+        # the default lambda1 is calibrated for unit-scale data; the window is rescaled by one
+        # global factor (relative variances and linear weights unchanged) before fitting
+        from full_pipeline import extract_causal_structures_ablation, compute_shd
+        X, names, A = AdjacencyConvention._chain_sem()
+        a = extract_causal_structures_ablation(X * 0.05, [], names, verbose=False, window_overlap=0.0, methods=("dagma",))
+        b = extract_causal_structures_ablation(X, [], names, verbose=False, window_overlap=0.0, methods=("dagma",))
+        self.assertEqual(compute_shd(a["dagma"][0].adjacency_matrix, A)["F1"], 1.0)
+        np.testing.assert_allclose(a["dagma"][0].adjacency_matrix.values, b["dagma"][0].adjacency_matrix.values, atol=1e-6)
+
     def test_unknown_method_rejected(self):
         from full_pipeline import extract_causal_structures_ablation
         X, names, A = AdjacencyConvention._chain_sem()

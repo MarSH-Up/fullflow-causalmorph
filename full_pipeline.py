@@ -1108,12 +1108,22 @@ def _fit_window_learner(method: str, window_df: pd.DataFrame, variable_names: Li
         m.fit(window_df)
         return pd.DataFrame(_from_lingam(m.adjacency_matrix_), columns=variable_names, index=variable_names), list(m.causal_order_)
     if method == "dagma":
-        # Linear DAGMA with the package defaults (l2 loss, lambda1 0.03, w_threshold 0.3) on the raw
-        # window, as the per-window learners above. W[i, j] is the effect of i on j: already [from, to].
+        # Linear DAGMA with the package defaults (l2 loss, lambda1 0.03, w_threshold 0.3). Those
+        # defaults are calibrated for unit-scale data; the grid's series have sd ~0.06-0.13, which
+        # makes the l1 term ~100x stronger and zeroes most weights (measured recall 0.15). The window
+        # is therefore centred and divided by ONE global factor (its mean column sd): relative
+        # variances (varsortability) and the linear SEM weights are unchanged, so the causal problem
+        # is the same; only the scale DAGMA's defaults assume is restored.
+        # W[i, j] is the effect of i on j: already [from, to].
         import contextlib, io
         from dagma.linear import DagmaLinear
+        Xw = window_df.to_numpy(dtype=float)
+        Xw = Xw - Xw.mean(axis=0)
+        scale = float(Xw.std(axis=0).mean())
+        if scale > 0:
+            Xw = Xw / scale
         with contextlib.redirect_stderr(io.StringIO()):          # its progress bar
-            W = DagmaLinear(loss_type="l2").fit(window_df.to_numpy(dtype=float), lambda1=0.03, w_threshold=0.3)
+            W = DagmaLinear(loss_type="l2").fit(Xw, lambda1=0.03, w_threshold=0.3)
         G = nx.from_numpy_array((np.abs(W) > 0).astype(int), create_using=nx.DiGraph)
         order = list(nx.topological_sort(G)) if nx.is_directed_acyclic_graph(G) else list(range(len(variable_names)))
         return pd.DataFrame(W, columns=variable_names, index=variable_names), order
