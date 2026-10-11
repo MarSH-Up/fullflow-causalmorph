@@ -25,7 +25,9 @@ def main():
     ap.add_argument("--batch_size", type=int, default=128,
                     help="scenarios per batch; every runner appends its results.csv after each batch")
     ap.add_argument("--cells", nargs="+", help="default: lin_laplace nonlin_laplace lin_normal nonlin_normal")
-    ap.add_argument("--arms", nargs="+", help="default: main cdnod_fz lite v1 cdnod_kci (add v2 for the cap ablation)")
+    ap.add_argument("--arms", nargs="+", default=["main", "cdnod_fz", "lite", "cdnod_kci"],
+                    help="default: main cdnod_fz lite cdnod_kci (v1 = the October pipeline and v2 = the uncapped "
+                         "ablation are available but no longer run by default)")
     ap.add_argument("--out", default="results/full_v2")
     ap.add_argument("--kci_n", type=int, default=600, help="held-out scenarios for CD-NOD with KCI")
     a = ap.parse_args()
@@ -34,8 +36,7 @@ def main():
                KCI_N=str(a.kci_n))
     if a.cells:
         env["CELLS"] = " ".join(a.cells)
-    if a.arms:
-        env["ARMS"] = " ".join(a.arms)
+    env["ARMS"] = " ".join(a.arms)
     log_dir = os.path.join(HERE, a.out, "logs")
     os.makedirs(log_dir, exist_ok=True)
     log_path = os.path.join(log_dir, "driver.log")

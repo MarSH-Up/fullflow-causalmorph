@@ -291,11 +291,11 @@ Four cells (linear/nonlinear × Laplace/Gaussian) of the 18,000-scenario grid:
 | `main` | pipeline with every change: v1L detection, v2 with the Stage I cap (`v2cap`) + ICA-LiNGAM, cold prior; plus, on the same detected windows, DirectLiNGAM, ICA-LiNGAM and DAGMA (linear) alone (`MAIN_ABLATION`) | all |
 | `cdnod_fz` | CD-NOD (Huang et al. 2020), Fisher-z, C = time index, one graph for the series | all |
 | `lite` | `litecap` + ICA-LiNGAM (isolates the new Stage II) | all |
-| `v1` | published CausalMorph + chain prior + DirectLiNGAM (the October pipeline, corrected convention) | all |
+| `v1` (optional, no longer run by default) | published CausalMorph + chain prior + DirectLiNGAM (the October pipeline, corrected convention) | all |
 | `cdnod_kci` | CD-NOD with KCI (the paper's test) on a 500-row time-uniform subsample | `KCI_N` = 600 held-out scenarios, stratified by p, regimes and samples |
 | `v2` (optional) | v2 without the Stage I cap + ICA-LiNGAM (isolates the cap) | all |
 
-Shared by the pipeline arms: v1L, γ 2.5, no hybrid, no bootstrap, no overlap. Default order: `main cdnod_fz lite v1 cdnod_kci`.
+Shared by the pipeline arms: v1L, γ 2.5, no hybrid, no bootstrap, no overlap. Default order (`run_full_experiments.py`): `main cdnod_fz lite cdnod_kci`; add `--arms ... v1` or `v2` to include the optional arms.
 
 **Held-out evaluation.** The analysis excludes the 600 scenarios the method was tuned on (`results/hardening_validation/sample_ids.txt`, `EXCLUDE_IDS`), so the numbers come from the other 17,400. CD-NOD with KCI draws its 600 scenarios from the held-out ones (`results/full_v2/kci_ids.txt`).
 
@@ -323,10 +323,10 @@ Overrides: `WORKERS=32`, `BATCH_SIZE=128` (scenarios per batch; every runner app
 |---|---|---|---|
 | `main` (pipeline + 3 per-window learners incl. DAGMA) | 15–20 min | 7.5–10 h | 30–40 h |
 | `cdnod_fz` | < 1 min | ~15 min | ~1 h |
-| `lite`, `v1` | ~4–5 min each | ~2–2.5 h each | ~16–20 h together |
+| `lite` | ~4–5 min | ~2–2.5 h | ~8–10 h |
 | `cdnod_kci` | ~3 h (600 held-out scenarios) | — | ~12 h |
 
-About 60–75 h in total at 12 workers; roughly halves at 24.
+About 50–65 h in total at 12 workers on the M4 Max; on the 64-core server at 60 workers, roughly 20–25 h.
 
 **Output.** `results/full_v2/<cell>/<arm>/results.csv`; `results/full_v2/analysis/`: `arms.csv`, `paired.csv` and `breakdown.csv` (windowed nSHD and F1, column `metric`), `detection.csv`, figures H, I, J (pipeline and ablations) and M, N (external methods). `results/full_v2/summary.txt` is the printed report. Mid-run: `python tools/analyze_full_v2.py --root results/full_v2`.
 
