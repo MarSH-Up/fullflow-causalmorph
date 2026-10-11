@@ -297,7 +297,7 @@ Four cells (linear/nonlinear × Laplace/Gaussian) of the 18,000-scenario grid:
 
 Shared by the pipeline arms: v1M (v1L on Spearman correlations), γ 2.0, no hybrid, no bootstrap, no overlap. Default order (`run_full_experiments.py`): `main cdnod_fz lite cdnod_kci`; add `--arms ... v1` or `v2` to include the optional arms.
 
-**Held-out evaluation.** The analysis excludes the 600 scenarios the method was tuned on (`results/hardening_validation/sample_ids.txt`, `EXCLUDE_IDS`), so the numbers come from the other 17,400. CD-NOD with KCI draws its 600 scenarios from the held-out ones (`results/full_v3/kci_ids.txt`).
+**Held-out evaluation.** The analysis excludes the 600 scenarios the method was tuned on (`results/hardening_validation/sample_ids.txt`, `EXCLUDE_IDS`), so the numbers come from the other 17,400. CD-NOD with KCI draws its 600 scenarios from the held-out ones (`<run>/kci_ids.txt`).
 
 **Not included.** RPCMCI (tigramite) was tried: it assigns regimes from lagged prediction errors and failed to converge on every probe with contemporaneous structure, so it does not apply to these data.
 
@@ -311,8 +311,8 @@ Shared by the pipeline arms: v1M (v1L on Spearman correlations), γ 2.0, no hybr
 cd Full-Flow && . .venv/bin/activate
 git pull && pip install -r requirements-fullgrid.txt
 python -m unittest tests.test_cdnod_baseline tests.test_causalmorph_v2 tests.test_hardening 2>&1 | tail -2   # 97 OK
-nohup ./run_full_experiments.sh > results/logs/full_v3_driver.log 2>&1 &
-tail -f results/logs/full_v3_driver.log
+nohup ./run_full_experiments.sh > results/logs/full_driver.log 2>&1 &
+tail -f results/logs/full_driver.log
 ```
 
 Overrides: `WORKERS=32`, `BATCH_SIZE=128` (scenarios per batch; every runner appends results.csv after each batch), `CELLS="lin_laplace lin_normal"`, `ARMS="main cdnod_fz"`, `KCI_N=300`, `OUT=...`. Re-running resumes; `--resume` refuses a results file written with another `--transform`, `--learner`, per-window learner set or CD-NOD setting, and the driver stops with the reason instead of continuing.
@@ -328,7 +328,7 @@ Overrides: `WORKERS=32`, `BATCH_SIZE=128` (scenarios per batch; every runner app
 
 About 50–65 h in total at 12 workers on the M4 Max; on the 64-core server at 60 workers, roughly 20–25 h.
 
-**Output.** `results/full_v3/<cell>/<arm>/results.csv`; `results/full_v3/analysis/`: `arms.csv`, `paired.csv` and `breakdown.csv` (windowed nSHD and F1, column `metric`), `detection.csv`, figures H, I, J (pipeline and ablations) and M, N (external methods). `results/full_v3/summary.txt` is the printed report. Mid-run: `python tools/analyze_full_v2.py --root results/full_v3`.
+**Output.** Each run gets its own folder, `results/full_<YYYYmmdd_HHMM>` (written as `<run>` here), so earlier runs are never overwritten; pass `--out <run>` (or `OUT=<run>`) to resume one. `<run>/<cell>/<arm>/results.csv`; `<run>/analysis/`: `arms.csv`, `paired.csv` and `breakdown.csv` (windowed nSHD and F1, column `metric`), `detection.csv`, figures H, I, J (pipeline and ablations) and M, N (external methods). `<run>/summary.txt` is the printed report. Mid-run: `python tools/analyze_full_v2.py` (the newest run, or `--root <run>`).
 
 **Smoke test (all arms and cells, ~3 min at 4 workers):**
 

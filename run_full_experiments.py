@@ -7,11 +7,14 @@ the analysis). Runs the driver with THIS interpreter, so the active venv is used
     python run_full_experiments.py --workers 60          # the 64-core Threadripper server
     python run_full_experiments.py --workers 24 --batch_size 128
     python run_full_experiments.py --cells lin_laplace --arms main cdnod_fz
+    python run_full_experiments.py --out results/full_20261011_0300   # resume that run
 
-The driver's output goes to the terminal and to results/full_v3/logs/driver.log.
-Re-running resumes where it stopped.
+Every new run writes to its own folder, results/full_<YYYYmmdd_HHMM>, so an
+earlier run is never overwritten. The driver's output goes to the terminal and
+to <out>/logs/driver.log. Pass --out with an existing folder to resume it.
 """
 import argparse
+import datetime as dt
 import os
 import subprocess
 import sys
@@ -28,9 +31,11 @@ def main():
     ap.add_argument("--arms", nargs="+", default=["main", "cdnod_fz", "lite", "cdnod_kci"],
                     help="default: main cdnod_fz lite cdnod_kci (v1 = the October pipeline and v2 = the uncapped "
                          "ablation are available but no longer run by default)")
-    ap.add_argument("--out", default="results/full_v3")
+    ap.add_argument("--out", help="output folder; default: a new results/full_<YYYYmmdd_HHMM>")
     ap.add_argument("--kci_n", type=int, default=600, help="held-out scenarios for CD-NOD with KCI")
     a = ap.parse_args()
+    a.out = a.out or f"results/full_{dt.datetime.now():%Y%m%d_%H%M}"
+    print(f"output folder: {a.out}", flush=True)
 
     env = dict(os.environ, PYTHON=sys.executable, WORKERS=str(a.workers), BATCH_SIZE=str(a.batch_size), OUT=a.out,
                KCI_N=str(a.kci_n))

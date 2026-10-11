@@ -14,7 +14,8 @@ nSHD and consensus F1, column `metric`), detection.csv, and figures
 H_pipeline_before_after.png, I_arms_by_cell[_wnshd].png, J_paired_forest[_wnshd].png.
 Cells or arms that have not run yet are skipped, so it can be run mid-way.
 
-    python tools/analyze_full_v2.py --root results/full_v3
+    python tools/analyze_full_v2.py                      # the newest results/full_* run
+    python tools/analyze_full_v2.py --root results/full_20261011_0300
 """
 import argparse
 import os
@@ -82,11 +83,16 @@ def n_failed(root, cell, arm):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--root", default="results/full_v3")
+    ap.add_argument("--root", help="run folder; default: the newest results/full_* run")
     ap.add_argument("--no_figures", action="store_true")
     ap.add_argument("--exclude_ids", default="results/hardening_validation/sample_ids.txt",
                     help="scenario ids left out of the analysis (the tuning sample); '' keeps all")
     a = ap.parse_args()
+    if not a.root:
+        from full_status import latest_run
+        a.root = latest_run(os.path.join(ROOT, "results"))
+        if not a.root:
+            raise SystemExit("no results/full_* run found; pass --root")
     ex_path = a.exclude_ids if not a.exclude_ids or os.path.isabs(a.exclude_ids) else os.path.join(ROOT, a.exclude_ids)
     exclude = frozenset(l.strip() for l in open(ex_path) if l.strip()) if ex_path and os.path.exists(ex_path) else frozenset()
     print(f"analysis excludes {len(exclude)} tuning scenarios ({ex_path or 'none'})")

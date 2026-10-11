@@ -47,7 +47,7 @@
 #   SCENARIO_IDS_FILE=ids.txt OUT=/tmp/smoke DATA_PREFIX=/tmp/smoke/ds_ ./run_full_experiments.sh   # smoke test
 #
 # Detached (server):
-#   nohup ./run_full_experiments.sh > results/logs/full_v3_driver.log 2>&1 &
+#   nohup ./run_full_experiments.sh > results/logs/full_driver.log 2>&1 &
 #
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; cd "$HERE"
@@ -57,7 +57,7 @@ WORKERS="${WORKERS:-12}"
 BATCH_SIZE="${BATCH_SIZE:-128}"   # scenarios per batch; results.csv is appended after every batch
 CELLS="${CELLS:-lin_laplace nonlin_laplace lin_normal nonlin_normal}"
 ARMS="${ARMS:-main cdnod_fz lite v1 cdnod_kci}"
-OUT="${OUT:-results/full_v3}"
+OUT="${OUT:-results/full_$(date +%Y%m%d_%H%M)}"   # a new folder per run; set OUT=<folder> to resume one
 SCENARIO_IDS_FILE="${SCENARIO_IDS_FILE:-}"
 DATA_PREFIX="${DATA_PREFIX:-datasets_full_}"   # generated cells go to ${DATA_PREFIX}<cell>/
 NONLIN="${NONLIN:-0.7}"; NONLIN_FUNC="${NONLIN_FUNC:-cube}"   # same mechanism as the 600-scenario benchmark

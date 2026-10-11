@@ -4,7 +4,7 @@ Progress of run_full_experiments.sh: one row per (arm, cell) in run order, with
 rows done, percentage, errors, rate since that step started, and time left;
 plus dataset generation and disk usage.
 
-    python tools/full_status.py                  # results/full_v3
+    python tools/full_status.py                  # the newest results/full_* run
     python tools/full_status.py --out /tmp/smoke
     watch -n 30 .venv/bin/python tools/full_status.py     # live, refreshed every 30 s
 """
@@ -18,6 +18,13 @@ ARMS = ["main", "cdnod_fz", "lite", "v1", "cdnod_kci", "v2"]
 CELLS = ["lin_laplace", "nonlin_laplace", "lin_normal", "nonlin_normal"]
 LABEL = {"main": "pipeline + DL/ICA/DAGMA", "cdnod_fz": "CD-NOD Fisher-z", "lite": "ablation lite",
          "v1": "October pipeline", "cdnod_kci": "CD-NOD KCI", "v2": "v2 without cap"}
+
+
+def latest_run(root="results"):
+    """The most recently started full-grid run: newest results/full_* folder with a RUN_INFO.txt."""
+    runs = [os.path.join(root, d) for d in os.listdir(root) if d.startswith("full_")] if os.path.isdir(root) else []
+    runs = [d for d in runs if os.path.exists(os.path.join(d, "RUN_INFO.txt"))]
+    return max(runs, key=lambda d: os.path.getmtime(os.path.join(d, "RUN_INFO.txt"))) if runs else None
 
 
 def count_rows(path):
@@ -55,9 +62,12 @@ def fmt_h(hours):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default="results/full_v3")
+    ap.add_argument("--out", help="run folder; default: the newest results/full_* run")
     ap.add_argument("--expected", type=int, default=18000)
     a = ap.parse_args()
+    a.out = a.out or latest_run()
+    if not a.out:
+        raise SystemExit("no results/full_* run found; pass --out")
     info = open(os.path.join(a.out, "RUN_INFO.txt")).read() if os.path.exists(os.path.join(a.out, "RUN_INFO.txt")) else ""
     m = re.search(r"arms: ([\w ]+?) \|", info); arms = m.group(1).split() if m else ARMS[:5]
     m = re.search(r"cells: ([\w ]+?) \|", info); cells = m.group(1).split() if m else CELLS
