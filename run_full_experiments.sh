@@ -110,17 +110,37 @@ arm_cmd () {   # prints nothing; fills the global CMD array for arm $1 on datase
 
 n_rows () { [ -f "$1" ] && echo $(( $(wc -l < "$1") - 1 )) || echo 0; }
 
-ensure_dataset () {
+want_rows () { if [ -n "$SCENARIO_IDS_FILE" ]; then grep -c . "$SCENARIO_IDS_FILE"; else echo "$EXPECTED_SCENARIOS"; fi; }
+
+# Dataset generation runs in the background, one process per missing cell, so
+# the arms on cells that are already complete (lin_laplace) start at once; each
+# arm waits only for the cell it needs.
+# (one variable GEN_PID_<cell> per cell: portable to bash 3.2, which has no associative arrays)
+start_generation () {
   local cell="$1" ds; ds="$(dataset_for "$cell")"
-  [ "$cell" = "lin_laplace" ] && { [ -f "$ds/index.csv" ] || { echo "missing $ds/index.csv (see RUNBOOK_full_grid.md)" >&2; exit 1; }; return; }
-  local want=$EXPECTED_SCENARIOS only=""
-  if [ -n "$SCENARIO_IDS_FILE" ]; then want=$(grep -c . "$SCENARIO_IDS_FILE"); only="--only_ids $SCENARIO_IDS_FILE"; fi
-  if [ "$(n_rows "$ds/index.csv")" -ge "$want" ]; then return; fi
-  echo "== generating $ds  $(date '+%F %H:%M') =="
+  if [ "$cell" = "lin_laplace" ]; then
+    [ -f "$ds/index.csv" ] || { echo "missing $ds/index.csv (see RUNBOOK_full_grid.md)" >&2; exit 1; }
+    return
+  fi
+  [ "$(n_rows "$ds/index.csv")" -ge "$(want_rows)" ] && return
+  local only=""; [ -n "$SCENARIO_IDS_FILE" ] && only="--only_ids $SCENARIO_IDS_FILE"
+  echo "== generating $ds in the background (log: $LOG/generate_$cell.log)  $(date '+%F %H:%M') =="
   # shellcheck disable=SC2046,SC2086
-  $PYTHON generate_datasets.py --output_dir "$ds" $only $(gen_flags "$cell") 2>&1 | tail -2
+  $PYTHON generate_datasets.py --output_dir "$ds" $only $(gen_flags "$cell") > "$LOG/generate_$cell.log" 2>&1 &
+  printf -v "GEN_PID_$cell" '%s' "$!"
+}
+
+wait_dataset () {
+  local cell="$1" ds; ds="$(dataset_for "$cell")"
+  local var="GEN_PID_$cell"
+  if [ -n "${!var:-}" ]; then
+    echo "   waiting for $ds to finish generating  $(date '+%F %H:%M')"
+    wait "${!var}" || { echo "ERROR: generating $ds failed; see $LOG/generate_$cell.log" >&2; tail -3 "$LOG/generate_$cell.log" >&2; exit 1; }
+    unset "$var"
+    echo "   $ds ready  $(date '+%F %H:%M')"
+  fi
   local got; got=$(n_rows "$ds/index.csv")
-  [ "$got" -ge "$want" ] || { echo "dataset $ds has $got scenarios, expected $want" >&2; exit 1; }
+  [ "$got" -ge "$(want_rows)" ] || { echo "dataset $ds has $got scenarios, expected $(want_rows)" >&2; exit 1; }
 }
 
 kci_ids () {   # stratified held-out ids for CD-NOD with KCI (same file for every cell)
@@ -160,9 +180,9 @@ echo "full experiments  cells: $CELLS  arms: $ARMS  workers: $WORKERS  out: $OUT
   echo "cells: $CELLS | arms: $ARMS | ids: ${SCENARIO_IDS_FILE:-all} | per-window learners: $MAIN_ABLATION"
   echo "kci: $KCI_N held-out scenarios, $KCI_NSUB-row subsample | analysis excludes: $EXCLUDE_IDS"; } | tee "$OUT/RUN_INFO.txt"
 
-for cell in $CELLS; do ensure_dataset "$cell"; done
+for cell in $CELLS; do start_generation "$cell"; done
 for arm in $ARMS; do
-  for cell in $CELLS; do run_arm "$cell" "$arm"; done
+  for cell in $CELLS; do wait_dataset "$cell"; run_arm "$cell" "$arm"; done
 done
 
 echo "== analysis  $(date '+%F %H:%M') =="
