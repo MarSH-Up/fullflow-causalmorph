@@ -4,6 +4,7 @@ One-command entry point for run_full_experiments.sh (every arm, every cell, then
 the analysis). Runs the driver with THIS interpreter, so the active venv is used.
 
     python run_full_experiments.py                       # 12 workers, all arms and cells
+    python run_full_experiments.py --workers 60          # the 64-core Threadripper server
     python run_full_experiments.py --workers 24 --batch_size 128
     python run_full_experiments.py --cells lin_laplace --arms main cdnod_fz
 
