@@ -289,6 +289,45 @@ class RefinedScale(unittest.TestCase):
         self.assertLessEqual(fp, 1, f"refined false positives {fp}: {refined}")
 
 
+class RankCorrelation(unittest.TestCase):
+    """v1M: the v1L statistic on Spearman correlations (ranks within each window)."""
+
+    def test_rank_statistic_is_pearson_on_window_ranks(self):
+        from scipy.stats import rankdata
+        from detectors.detectors_correlation import standardized_corr_change
+        rng = np.random.default_rng(11)
+        X = rng.laplace(size=(900, 4))
+        W, t = 150, 400
+        z = standardized_corr_change(X, W, rank=True)
+        triu = np.triu_indices(4, k=1)
+        r = lambda A: np.corrcoef(rankdata(A, axis=0).T)[triu]
+        expected = np.sqrt((W - 3) / 2.0) * (np.arctanh(r(X[t:t + W])) - np.arctanh(r(X[t - W:t])))
+        np.testing.assert_allclose(z[t], expected, rtol=1e-10)
+
+    def test_rank_statistic_is_invariant_to_monotone_transforms(self):
+        from detectors.detectors_correlation import standardized_corr_change
+        rng = np.random.default_rng(12)
+        X = rng.standard_normal((1200, 3))
+        X[:, 1] += 0.8 * X[:, 0]
+        Y = np.column_stack([np.tanh(3 * X[:, 0]), X[:, 1] ** 3, np.exp(X[:, 2])])
+        W = 150
+        np.testing.assert_allclose(standardized_corr_change(X, W, rank=True),
+                                   standardized_corr_change(Y, W, rank=True), rtol=1e-10, equal_nan=True)
+        self.assertFalse(np.allclose(standardized_corr_change(X, W), standardized_corr_change(Y, W),
+                                     equal_nan=True), "premise: Pearson is not invariant")
+
+    def test_v1m_selects_rank_correlations(self):
+        from full_pipeline import detect_change_points
+        rng = np.random.default_rng(13)
+        T = 3000
+        X = rng.laplace(size=(T, 4))
+        X[T // 2:, 1] = np.tanh(4 * X[T // 2:, 0]) + 0.3 * X[T // 2:, 1]
+        res = detect_change_points(X, baseline_end=150, min_regime_len=1500, detector_version="v1M",
+                                   corr_gamma=2.5)
+        self.assertEqual(len(res.change_points), 1, f"expected one change point, got {res.change_points}")
+        self.assertLess(abs(res.change_points[0] - T // 2), 300)
+
+
 class AdjacencyConvention(unittest.TestCase):
     """One convention everywhere: adjacency[from, to], the generator's.
     lingam returns B[to, from] and CausalMorph reads parents from rows, i.e.

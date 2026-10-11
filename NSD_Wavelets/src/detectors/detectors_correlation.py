@@ -13,6 +13,14 @@ changes even when the per-channel energy doesn't move much.
 """
 import numpy as np
 from scipy.signal import find_peaks
+from scipy.stats import rankdata
+
+
+def _window_corr(Xw: np.ndarray, rank: bool) -> np.ndarray:
+    """Pearson correlation of a window, or Spearman (Pearson on within-window ranks)."""
+    if rank:
+        Xw = rankdata(Xw, axis=0)
+    return np.nan_to_num(np.corrcoef(Xw.T), nan=0.0)
 
 
 def standardized_corr_change(
@@ -21,6 +29,7 @@ def standardized_corr_change(
     studentize: bool = False,
     scale_mask: np.ndarray = None,
     return_scale: bool = False,
+    rank: bool = False,
 ):
     """
     Per-pair change in correlation between the windows before and after t,
@@ -48,6 +57,10 @@ def standardized_corr_change(
         longer inflate the MAD. If fewer than `window` rows survive the mask,
         the unmasked estimate is kept.
     return_scale : also return s_ij, shape [m] (ones when not studentising).
+    rank : use Spearman correlations (ranks taken within each window). They
+        track any monotone dependence, not only the linear part, and are not
+        moved by single heavy-tailed draws. The Fisher variance is ~1.06/(W-3)
+        instead of 1/(W-3), which the studentised scale absorbs.
     """
     T, N = X.shape
     triu = np.triu_indices(N, k=1)
@@ -57,8 +70,8 @@ def standardized_corr_change(
     scale = np.sqrt(max(window - 3, 1) / 2.0)
     clip = 1.0 - 1e-6
     for t in range(window, T - window):
-        c_past = np.nan_to_num(np.corrcoef(X[t - window:t].T), nan=0.0)[triu]
-        c_fut = np.nan_to_num(np.corrcoef(X[t:t + window].T), nan=0.0)[triu]
+        c_past = _window_corr(X[t - window:t], rank)[triu]
+        c_fut = _window_corr(X[t:t + window], rank)[triu]
         out[t] = scale * (np.arctanh(np.clip(c_fut, -clip, clip))
                           - np.arctanh(np.clip(c_past, -clip, clip)))
     s_hat = np.ones(out.shape[1])
@@ -89,6 +102,7 @@ def detect_correlation_changes(
     adaptive_null: bool = False,
     studentize: bool = False,
     refine_scale: bool = False,
+    rank: bool = False,
 ):
     """
     Detect change points from shifts in pairwise channel correlations.
@@ -116,6 +130,8 @@ def detect_correlation_changes(
                    and detect again. Removes the bias the bumps put into the
                    single-pass MAD, which is what costs the later, smaller
                    changes when regimes are short.
+    rank : for "max", Spearman instead of Pearson correlations (see
+           standardized_corr_change); ignored for "frobenius"
     adaptive_null : re-estimate the frobenius threshold from the segment since
                     the last accepted change point (with a guard band of one
                     window on each side) instead of from regime 0 only.
@@ -136,7 +152,7 @@ def detect_correlation_changes(
         threshold = float(np.sqrt(2.0 * np.log(m)) + gamma)
 
         def _detect(mask):
-            zeta = standardized_corr_change(X, window, studentize=studentize, scale_mask=mask)
+            zeta = standardized_corr_change(X, window, studentize=studentize, scale_mask=mask, rank=rank)
             sig = np.nan_to_num(np.nanmax(np.abs(zeta), axis=1), nan=0.0)
             pk, _ = find_peaks(sig, height=threshold, distance=refractory_period)
             return [int(p) for p in pk if edge_margin <= p < T - edge_margin], sig
