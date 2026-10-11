@@ -14,7 +14,7 @@ nSHD and consensus F1, column `metric`), detection.csv, and figures
 H_pipeline_before_after.png, I_arms_by_cell[_wnshd].png, J_paired_forest[_wnshd].png.
 Cells or arms that have not run yet are skipped, so it can be run mid-way.
 
-    python tools/analyze_full_v2.py --root results/full_v2
+    python tools/analyze_full_v2.py --root results/full_v3
 """
 import argparse
 import os
@@ -82,7 +82,7 @@ def n_failed(root, cell, arm):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--root", default="results/full_v2")
+    ap.add_argument("--root", default="results/full_v3")
     ap.add_argument("--no_figures", action="store_true")
     ap.add_argument("--exclude_ids", default="results/hardening_validation/sample_ids.txt",
                     help="scenario ids left out of the analysis (the tuning sample); '' keeps all")

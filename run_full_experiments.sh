@@ -28,7 +28,7 @@
 # assigns regimes from lagged prediction errors and failed to converge on every
 # probe with contemporaneous structure (2026-10-10).
 #
-# Shared by the pipeline arms: v1L detector, gamma 2.5, no hybrid, no
+# Shared by the pipeline arms: v1M detector (Spearman), gamma 2.0, no hybrid, no
 # bootstrap, no window overlap. Arms run in the order of ARMS across all
 # cells, so the proposed pipeline and the cheap baselines finish first.
 #
@@ -47,7 +47,7 @@
 #   SCENARIO_IDS_FILE=ids.txt OUT=/tmp/smoke DATA_PREFIX=/tmp/smoke/ds_ ./run_full_experiments.sh   # smoke test
 #
 # Detached (server):
-#   nohup ./run_full_experiments.sh > results/logs/full_v2_driver.log 2>&1 &
+#   nohup ./run_full_experiments.sh > results/logs/full_v3_driver.log 2>&1 &
 #
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; cd "$HERE"
@@ -57,7 +57,7 @@ WORKERS="${WORKERS:-12}"
 BATCH_SIZE="${BATCH_SIZE:-128}"   # scenarios per batch; results.csv is appended after every batch
 CELLS="${CELLS:-lin_laplace nonlin_laplace lin_normal nonlin_normal}"
 ARMS="${ARMS:-main cdnod_fz lite v1 cdnod_kci}"
-OUT="${OUT:-results/full_v2}"
+OUT="${OUT:-results/full_v3}"
 SCENARIO_IDS_FILE="${SCENARIO_IDS_FILE:-}"
 DATA_PREFIX="${DATA_PREFIX:-datasets_full_}"   # generated cells go to ${DATA_PREFIX}<cell>/
 NONLIN="${NONLIN:-0.7}"; NONLIN_FUNC="${NONLIN_FUNC:-cube}"   # same mechanism as the 600-scenario benchmark
@@ -87,7 +87,7 @@ gen_flags () {
   esac
 }
 
-PIPE_COMMON=(--detector v1L --corr_gamma 2.5 --no-hybrid --chain_prior_threshold 0.05 --bootstrap_n 0 --window_overlap 0.0)
+PIPE_COMMON=(--detector v1M --corr_gamma 2.0 --no-hybrid --chain_prior_threshold 0.05 --bootstrap_n 0 --window_overlap 0.0)
 
 arm_cmd () {   # prints nothing; fills the global CMD array for arm $1 on dataset $2, output $3
   local arm="$1" ds="$2" dir="$3"

@@ -738,6 +738,14 @@ def run_experiments(
                     f"{results_path} was written with {key}={sorted(found)}, but this run asks for "
                     f"{key}={requested!r}; resuming would mix them in one file. Use a fresh --output_dir."
                 )
+        if "segmentation_mode" in columns:
+            modes = set(pd.read_csv(results_path, usecols=["segmentation_mode"], dtype=str)["segmentation_mode"].dropna())
+            other = {m for m in modes if m.startswith("v1") and m != detector_version}
+            if other:
+                raise SystemExit(
+                    f"{results_path} was written with detector {sorted(other)}, but this run asks for "
+                    f"{detector_version!r}; resuming would mix detectors in one file. Use a fresh --output_dir."
+                )
         if run_cfg.get("run_ablation", True):
             missing = [m for m in run_cfg.get("ablation_methods", ABLATION_METHODS) if f"{m}_mean_f1" not in columns]
             if missing:

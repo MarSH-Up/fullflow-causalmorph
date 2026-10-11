@@ -829,6 +829,22 @@ class TransformOption(unittest.TestCase):
                                 learner="icalingam", ablation_methods=("directlingam", "icalingam", "dagma"))
             self.assertIn("dagma", str(cm.exception.code))
 
+    def test_resume_refuses_a_different_detector(self):
+        import tempfile
+        from run_experiments import run_experiments
+        with tempfile.TemporaryDirectory() as d:
+            data, out = os.path.join(d, "data"), os.path.join(d, "out")
+            os.makedirs(data); os.makedirs(out)
+            pd.DataFrame({"scenario_id": ["s0", "s1"], "p": ["3", "3"]}).to_csv(
+                os.path.join(data, "index.csv"), index=False)
+            pd.DataFrame({"scenario_id": ["s0"], "status": ["ok"], "w0_prior_source": ["cold"],
+                          "learner": ["icalingam"], "transform": ["v2cap"], "segmentation_mode": ["v1L"]}).to_csv(
+                os.path.join(out, "results.csv"), index=False)
+            with self.assertRaises(SystemExit) as cm:
+                run_experiments(dataset_dir=data, output_dir=out, resume=True, transform="v2cap",
+                                learner="icalingam", detector_version="v1M", run_ablation=False)
+            self.assertIn("detector", str(cm.exception.code))
+
     def test_transform_failure_is_recorded(self):
         from unittest import mock
         import full_pipeline

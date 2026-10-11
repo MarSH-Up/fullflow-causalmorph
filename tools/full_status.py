@@ -4,7 +4,7 @@ Progress of run_full_experiments.sh: one row per (arm, cell) in run order, with
 rows done, percentage, errors, rate since that step started, and time left;
 plus dataset generation and disk usage.
 
-    python tools/full_status.py                  # results/full_v2
+    python tools/full_status.py                  # results/full_v3
     python tools/full_status.py --out /tmp/smoke
     watch -n 30 .venv/bin/python tools/full_status.py     # live, refreshed every 30 s
 """
@@ -55,7 +55,7 @@ def fmt_h(hours):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default="results/full_v2")
+    ap.add_argument("--out", default="results/full_v3")
     ap.add_argument("--expected", type=int, default=18000)
     a = ap.parse_args()
     info = open(os.path.join(a.out, "RUN_INFO.txt")).read() if os.path.exists(os.path.join(a.out, "RUN_INFO.txt")) else ""
