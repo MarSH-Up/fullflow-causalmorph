@@ -327,6 +327,24 @@ class RankCorrelation(unittest.TestCase):
         self.assertEqual(len(res.change_points), 1, f"expected one change point, got {res.change_points}")
         self.assertLess(abs(res.change_points[0] - T // 2), 300)
 
+    def test_v1n_keeps_spearman_points_that_pearson_confirms(self):
+        from unittest import mock
+        import full_pipeline
+        X = np.random.default_rng(14).standard_normal((4000, 4))
+        calls = []
+
+        def fake(X_, window, gamma, rank, **kw):
+            calls.append((gamma, rank, window))
+            return ([1050, 2000] if rank else [1000, 3000]), None, None
+
+        with mock.patch.object(full_pipeline, "detect_correlation_changes", side_effect=fake):
+            res = full_pipeline.detect_change_points(X, baseline_end=150, min_regime_len=1000,
+                                                     detector_version="v1N", corr_gamma=2.0, corr_gamma_rank=1.5)
+        W = 200                                     # max(50, 1000 // 5)
+        self.assertEqual(sorted((g, r) for g, r, _ in calls), [(1.5, True), (2.0, False)])
+        self.assertTrue(all(w == W for _, _, w in calls))
+        self.assertEqual(res.change_points, [1050])  # 2000 has no Pearson point within W; 3000 is Pearson-only
+
 
 class AdjacencyConvention(unittest.TestCase):
     """One convention everywhere: adjacency[from, to], the generator's.

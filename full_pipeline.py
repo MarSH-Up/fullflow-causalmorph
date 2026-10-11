@@ -522,6 +522,7 @@ def detect_change_points(
     detector_version: str = "v1G",
     corr_gamma: float = 2.0,
     adaptive_null: bool = False,
+    corr_gamma_rank: float = 1.5,
 ) -> DetectionResult:
     """
     Run the wavelet-based multi-moment detector.
@@ -549,6 +550,13 @@ def detect_change_points(
               series, before CausalMorph linearises anything, so with
               nonlinear mechanisms Pearson sees only the linear part of a
               monotone dependence and is moved by heavy-tailed draws.
+      "v1N" — agreement of v1L (Pearson, gamma = corr_gamma) and v1M
+              (Spearman, gamma = corr_gamma_rank): a Spearman change point
+              is kept only when Pearson has one within one window. Spearman
+              alone removes most of Pearson's false alarms on nonlinear data
+              but adds some on linear data; the two disagree on different
+              false alarms, so requiring both keeps v1L's precision on linear
+              data and v1M's on nonlinear data, at a lower gamma for each.
       "v1I" — ensemble: v1G + wavelet-coherence-based detector.
               Generalises v1H by replacing Pearson correlation with squared
               wavelet coherence (Grinsted et al., 2004) — frequency-resolved
@@ -573,7 +581,7 @@ def detect_change_points(
     step_win = max(100, min_regime_len // 5)   # 500→100, 2500→500, 5000→1000
     ch_win   = max(160, min_regime_len // 5)   # 500→160, 2500→500, 5000→1000
 
-    if detector_version in ("v1G", "v1H", "v1I", "v1J", "v1K", "v1L", "v1M"):  # all use v1G as their wavelet base
+    if detector_version in ("v1G", "v1H", "v1I", "v1J", "v1K", "v1L", "v1M", "v1N"):  # all use v1G as their wavelet base
         result = detect_nonstationarity_v1G(
             X,
             baseline_idx,
@@ -613,7 +621,7 @@ def detect_change_points(
             seed=seed,
         )
 
-    if detector_version in ("v1H", "v1J", "v1K", "v1L", "v1M"):
+    if detector_version in ("v1H", "v1J", "v1K", "v1L", "v1M", "v1N"):
         # v1H detector: correlation-based change-point detection.
         # Tracks INTER-channel correlation shifts via Frobenius distance —
         # the signal that actually changes when the causal graph rewires.
@@ -628,21 +636,31 @@ def detect_change_points(
         # downstream code (plots, events, severity) has the wavelet
         # diagnostics. Only the change-point list is replaced.
         corr_window = max(50, min_regime_len // 5)
-        corr_cps, _, _ = detect_correlation_changes(
-            X,
-            window=corr_window,
-            refractory_period=refractory,
-            edge_margin=corr_window,
-            baseline_idx=baseline_idx,
-            threshold_mad_k=6.0,      # stricter peak threshold (default 4.0)
-            min_threshold=0.5,        # higher floor (default 0.3)
-            statistic="max" if detector_version in ("v1J", "v1K", "v1L", "v1M") else "frobenius",
-            gamma=corr_gamma,
-            adaptive_null=adaptive_null,
-            studentize=detector_version in ("v1K", "v1L", "v1M"),
-            refine_scale=detector_version in ("v1L", "v1M"),
-            rank=(detector_version == "v1M"),
-        )
+
+        def _corr_cps(gamma, rank):
+            cps, _, _ = detect_correlation_changes(
+                X,
+                window=corr_window,
+                refractory_period=refractory,
+                edge_margin=corr_window,
+                baseline_idx=baseline_idx,
+                threshold_mad_k=6.0,      # stricter peak threshold (default 4.0)
+                min_threshold=0.5,        # higher floor (default 0.3)
+                statistic="max" if detector_version in ("v1J", "v1K", "v1L", "v1M", "v1N") else "frobenius",
+                gamma=gamma,
+                adaptive_null=adaptive_null,
+                studentize=detector_version in ("v1K", "v1L", "v1M", "v1N"),
+                refine_scale=detector_version in ("v1L", "v1M", "v1N"),
+                rank=rank,
+            )
+            return cps
+
+        if detector_version == "v1N":
+            pearson = _corr_cps(corr_gamma, rank=False)
+            corr_cps = [c for c in _corr_cps(corr_gamma_rank, rank=True)
+                        if any(abs(c - d) <= corr_window for d in pearson)]
+        else:
+            corr_cps = _corr_cps(corr_gamma, rank=(detector_version == "v1M"))
 
         # Use correlation CPs as the detector output. Fall back to v1G only
         # if correlation found nothing at all (rare safety net).

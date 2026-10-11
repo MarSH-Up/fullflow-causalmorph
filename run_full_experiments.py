@@ -8,10 +8,15 @@ the analysis). Runs the driver with THIS interpreter, so the active venv is used
     python run_full_experiments.py --workers 24 --batch_size 128
     python run_full_experiments.py --cells lin_laplace --arms main cdnod_fz
     python run_full_experiments.py --out results/full_20261011_0300   # resume that run
+    python run_full_experiments.py --reuse_from results/full_v2         # new detector, same CD-NOD
 
 Every new run writes to its own folder, results/full_<YYYYmmdd_HHMM>, so an
 earlier run is never overwritten. The driver's output goes to the terminal and
 to <out>/logs/driver.log. Pass --out with an existing folder to resume it.
+
+--reuse_from links the CD-NOD arms (and kci_ids.txt) of an earlier, finished run
+into the new folder instead of running them again: CD-NOD does not use the
+pipeline's detector, so its results do not change when the detector does.
 """
 import argparse
 import datetime as dt
@@ -20,6 +25,27 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+CELLS = ["lin_laplace", "nonlin_laplace", "lin_normal", "nonlin_normal"]
+DETECTOR_FREE = ("cdnod_fz", "cdnod_kci")   # arms that do not depend on the pipeline's detector
+
+
+def reuse_arms(src, out, arms, cells):
+    """Symlink src/<cell>/<arm> into out/ for the detector-free arms; returns the arms left to run."""
+    src_abs = os.path.abspath(os.path.join(HERE, src))
+    for arm in [a for a in arms if a in DETECTOR_FREE]:
+        for cell in cells:
+            old = os.path.join(src_abs, cell, arm)
+            if not os.path.exists(os.path.join(old, "results.csv")):
+                raise SystemExit(f"--reuse_from: {old}/results.csv not found; run that arm or drop it")
+            new = os.path.join(HERE, out, cell, arm)
+            os.makedirs(os.path.dirname(new), exist_ok=True)
+            if not os.path.lexists(new):
+                os.symlink(old, new)
+            print(f"reused {cell}/{arm} <- {old}", flush=True)
+    kci = os.path.join(src_abs, "kci_ids.txt")
+    if "cdnod_kci" in arms and os.path.exists(kci) and not os.path.lexists(os.path.join(HERE, out, "kci_ids.txt")):
+        os.symlink(kci, os.path.join(HERE, out, "kci_ids.txt"))
+    return [a for a in arms if a not in DETECTOR_FREE]
 
 
 def main():
@@ -33,9 +59,12 @@ def main():
                          "ablation are available but no longer run by default)")
     ap.add_argument("--out", help="output folder; default: a new results/full_<YYYYmmdd_HHMM>")
     ap.add_argument("--kci_n", type=int, default=600, help="held-out scenarios for CD-NOD with KCI")
+    ap.add_argument("--reuse_from", help="earlier run folder whose CD-NOD arms are linked instead of re-run")
     a = ap.parse_args()
     a.out = a.out or f"results/full_{dt.datetime.now():%Y%m%d_%H%M}"
     print(f"output folder: {a.out}", flush=True)
+    if a.reuse_from:
+        a.arms = reuse_arms(a.reuse_from, a.out, a.arms, a.cells or CELLS)
 
     env = dict(os.environ, PYTHON=sys.executable, WORKERS=str(a.workers), BATCH_SIZE=str(a.batch_size), OUT=a.out,
                KCI_N=str(a.kci_n))
