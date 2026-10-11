@@ -738,6 +738,13 @@ def run_experiments(
                     f"{results_path} was written with {key}={sorted(found)}, but this run asks for "
                     f"{key}={requested!r}; resuming would mix them in one file. Use a fresh --output_dir."
                 )
+        if run_cfg.get("run_ablation", True):
+            missing = [m for m in run_cfg.get("ablation_methods", ABLATION_METHODS) if f"{m}_mean_f1" not in columns]
+            if missing:
+                raise SystemExit(
+                    f"{results_path} has no columns for per-window learner(s) {missing} (it was started "
+                    f"with other --ablation_methods); appending would silently drop them. Use a fresh --output_dir."
+                )
         done_ids = set(pd.read_csv(results_path, usecols=["scenario_id"],
                                    dtype=str)["scenario_id"])
         n_done   = len(done_ids)

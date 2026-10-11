@@ -282,39 +282,63 @@ per-scenario win-rates 106/31, 113/34 and 115/33.
 > per-regime precision 0.324). The compendium's file map calls it the baseline;
 > the one that reproduces Table 3 is `v1h_phase1` (78 columns, 0.328).
 
-## Full experiments for CausalMorph v2 (`run_full_experiments.sh`, 2026-10-10)
+## Full experiments for CausalMorph v2 against every method (`run_full_experiments.sh`, 2026-10-10)
 
-Four cells (linear/nonlinear × Laplace/Gaussian) of the 18,000-scenario grid, three arms each:
+Four cells (linear/nonlinear × Laplace/Gaussian) of the 18,000-scenario grid:
 
-| arm | configuration | gives |
+| arm | what runs | scenarios |
 |---|---|---|
-| `main` | v2 with the Stage I cap (`--transform v2cap`) + ICA-LiNGAM, cold prior, ablation on | the proposed pipeline with every change, plus ICA-LiNGAM and DirectLiNGAM alone on the same windows |
-| `lite` | the same with Stage II off (`litecap`) + ICA-LiNGAM | isolates the new Stage II |
-| `v1` | published CausalMorph + chain prior + DirectLiNGAM | the October pipeline, corrected convention ("before") |
-| `v2` (optional) | v2 without the Stage I cap + ICA-LiNGAM | isolates the Stage I cap; add with `ARMS="main lite v1 v2"` (+4 runs) |
+| `main` | pipeline with every change: v1L detection, v2 with the Stage I cap (`v2cap`) + ICA-LiNGAM, cold prior; plus, on the same detected windows, DirectLiNGAM, ICA-LiNGAM and DAGMA (linear) alone (`MAIN_ABLATION`) | all |
+| `cdnod_fz` | CD-NOD (Huang et al. 2020), Fisher-z, C = time index, one graph for the series | all |
+| `lite` | `litecap` + ICA-LiNGAM (isolates the new Stage II) | all |
+| `v1` | published CausalMorph + chain prior + DirectLiNGAM (the October pipeline, corrected convention) | all |
+| `cdnod_kci` | CD-NOD with KCI (the paper's test) on a 500-row time-uniform subsample | `KCI_N` = 600 held-out scenarios, stratified by p, regimes and samples |
+| `v2` (optional) | v2 without the Stage I cap + ICA-LiNGAM (isolates the cap) | all |
 
-Shared: v1L, γ 2.5, no hybrid, no bootstrap, no overlap. Arms run `main → lite → v1` across all cells.
+Shared by the pipeline arms: v1L, γ 2.5, no hybrid, no bootstrap, no overlap. Default order: `main cdnod_fz lite v1 cdnod_kci`.
 
-**Disk.** `lin_laplace` uses the existing `datasets/` (19 GB). The other three cells are generated on first run into `datasets_full_<cell>/`, about 19 GB each (≈ 57 GB more). Generation is skipped when a directory already holds 18,000 scenarios.
+**Held-out evaluation.** The analysis excludes the 600 scenarios the method was tuned on (`results/hardening_validation/sample_ids.txt`, `EXCLUDE_IDS`), so the numbers come from the other 17,400. CD-NOD with KCI draws its 600 scenarios from the held-out ones (`results/full_v2/kci_ids.txt`).
+
+**Not included.** RPCMCI (tigramite) was tried: it assigns regimes from lagged prediction errors and failed to converge on every probe with contemporaneous structure, so it does not apply to these data.
+
+**Environment.** `requirements-fullgrid.txt` now includes `causal-learn==0.1.4.0` and `dagma==1.1.1`; numpy stays at 1.26.4 (do not let another install upgrade it: scipy and scikit-learn break on numpy 2).
+
+**Disk.** `lin_laplace` uses `datasets/` (19 GB). The other three cells are generated on first run into `datasets_full_<cell>/`, about 19 GB each (≈ 57 GB more).
 
 **Run (server):**
 
 ```bash
 cd Full-Flow && . .venv/bin/activate
-git pull && python -m unittest tests.test_causalmorph_v2 tests.test_hardening 2>&1 | tail -2
+git pull && pip install -r requirements-fullgrid.txt
+python -m unittest tests.test_cdnod_baseline tests.test_causalmorph_v2 tests.test_hardening 2>&1 | tail -2   # 97 OK
 nohup ./run_full_experiments.sh > results/logs/full_v2_driver.log 2>&1 &
 tail -f results/logs/full_v2_driver.log
 ```
 
-Overrides: `WORKERS=24`, `CELLS="lin_laplace lin_normal"`, `ARMS="main"`, `OUT=...`. Re-running resumes; `--resume` refuses a results file written with another `--transform` or `--learner`.
+Overrides: `WORKERS=32`, `CELLS="lin_laplace lin_normal"`, `ARMS="main cdnod_fz"`, `KCI_N=300`, `OUT=...`. Re-running resumes; `--resume` refuses a results file written with another `--transform`, `--learner`, per-window learner set or CD-NOD setting, and the driver stops with the reason instead of continuing.
 
-**Budget.** On the M4 Max at 12 workers a 600-scenario row took 4–5 min, so one arm on one cell of the full grid is about 2–2.5 h there, and the 12 arm × cell runs about 25–30 h. Scale by the server's per-core speed.
+**Budget at 12 workers, measured on the M4 Max (scale by the server's per-core speed and worker count):**
 
-**Output.** `results/full_v2/<cell>/<arm>/results.csv`; `results/full_v2/analysis/` holds `arms.csv`, `paired.csv` (Wilcoxon, bootstrap CI, rank-biserial), `breakdown.csv` (ΔF1 by p, regimes and samples), `detection.csv` and figures H, I, J. `results/full_v2/summary.txt` is the printed report. The analysis can be run mid-way: `python tools/analyze_full_v2.py --root results/full_v2`.
+| arm | per 600 scenarios | per cell (18,000) | 4 cells |
+|---|---|---|---|
+| `main` (pipeline + 3 per-window learners incl. DAGMA) | 15–20 min | 7.5–10 h | 30–40 h |
+| `cdnod_fz` | < 1 min | ~15 min | ~1 h |
+| `lite`, `v1` | ~4–5 min each | ~2–2.5 h each | ~16–20 h together |
+| `cdnod_kci` | ~3 h (600 held-out scenarios) | — | ~12 h |
 
-**Smoke test (4 scenarios, all cells and arms, ~3 min at 4 workers):**
+About 60–75 h in total at 12 workers; roughly halves at 24.
+
+**Output.** `results/full_v2/<cell>/<arm>/results.csv`; `results/full_v2/analysis/`: `arms.csv`, `paired.csv` and `breakdown.csv` (windowed nSHD and F1, column `metric`), `detection.csv`, figures H, I, J (pipeline and ablations) and M, N (external methods). `results/full_v2/summary.txt` is the printed report. Mid-run: `python tools/analyze_full_v2.py --root results/full_v2`.
+
+**Smoke test (all arms and cells, ~3 min at 4 workers):**
 
 ```bash
-head -4 results/hardening_validation/sample_ids.txt > /tmp/ids.txt
-SCENARIO_IDS_FILE=/tmp/ids.txt OUT=/tmp/smoke DATA_PREFIX=/tmp/smoke/ds_ WORKERS=4 ./run_full_experiments.sh
+python - <<'EOF'
+import pandas as pd
+ix = pd.read_csv("datasets/index.csv", dtype=str)
+ex = {l.strip() for l in open("results/hardening_validation/sample_ids.txt") if l.strip()}
+ix = ix[~ix.scenario_id.isin(ex) & ix.p.isin(["3", "4", "5"]) & (ix.samples_regime == "500")]
+open("/tmp/ids.txt", "w").write("\n".join(ix.groupby("p").head(2).scenario_id) + "\n")
+EOF
+WORKERS=4 KCI_N=3 SCENARIO_IDS_FILE=/tmp/ids.txt OUT=/tmp/smoke DATA_PREFIX=/tmp/smoke/ds_ ./run_full_experiments.sh
 ```
