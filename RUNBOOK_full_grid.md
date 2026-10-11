@@ -315,7 +315,7 @@ nohup ./run_full_experiments.sh > results/logs/full_v2_driver.log 2>&1 &
 tail -f results/logs/full_v2_driver.log
 ```
 
-Overrides: `WORKERS=32`, `CELLS="lin_laplace lin_normal"`, `ARMS="main cdnod_fz"`, `KCI_N=300`, `OUT=...`. Re-running resumes; `--resume` refuses a results file written with another `--transform`, `--learner`, per-window learner set or CD-NOD setting, and the driver stops with the reason instead of continuing.
+Overrides: `WORKERS=32`, `BATCH_SIZE=128` (scenarios per batch; every runner appends results.csv after each batch), `CELLS="lin_laplace lin_normal"`, `ARMS="main cdnod_fz"`, `KCI_N=300`, `OUT=...`. Re-running resumes; `--resume` refuses a results file written with another `--transform`, `--learner`, per-window learner set or CD-NOD setting, and the driver stops with the reason instead of continuing.
 
 **Budget at 12 workers, measured on the M4 Max (scale by the server's per-core speed and worker count):**
 

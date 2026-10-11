@@ -41,7 +41,7 @@
 # setting; dataset generation is skipped when a directory is complete.
 #
 #   ./run_full_experiments.sh
-#   WORKERS=32 ./run_full_experiments.sh
+#   WORKERS=32 BATCH_SIZE=128 ./run_full_experiments.sh
 #   CELLS="lin_laplace" ARMS="main cdnod_fz" ./run_full_experiments.sh
 #   ARMS="main cdnod_fz lite v1 cdnod_kci v2" ./run_full_experiments.sh        # also measure the Stage I cap
 #   SCENARIO_IDS_FILE=ids.txt OUT=/tmp/smoke DATA_PREFIX=/tmp/smoke/ds_ ./run_full_experiments.sh   # smoke test
@@ -54,7 +54,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; cd "$HERE"
 
 PYTHON="${PYTHON:-python}"
 WORKERS="${WORKERS:-12}"
-BATCH_SIZE="${BATCH_SIZE:-50}"
+BATCH_SIZE="${BATCH_SIZE:-128}"   # scenarios per batch; results.csv is appended after every batch
 CELLS="${CELLS:-lin_laplace nonlin_laplace lin_normal nonlin_normal}"
 ARMS="${ARMS:-main cdnod_fz lite v1 cdnod_kci}"
 OUT="${OUT:-results/full_v2}"
@@ -138,7 +138,7 @@ run_arm () {
   arm_cmd "$arm" "$ds" "$dir"
   if [ "$arm" = "cdnod_kci" ]; then CMD+=(--scenario_ids_file "$(kci_ids)")
   elif [ -n "$SCENARIO_IDS_FILE" ]; then CMD+=(--scenario_ids_file "$SCENARIO_IDS_FILE"); fi
-  case "$arm" in cdnod_*) CMD+=(--workers "$WORKERS" --resume) ;; *) CMD+=(--workers "$WORKERS" --batch_size "$BATCH_SIZE" --resume) ;; esac
+  CMD+=(--workers "$WORKERS" --batch_size "$BATCH_SIZE" --resume)
   # The runner's exit status is checked explicitly: a failed or refused run
   # (e.g. --resume over a file written with other settings) stops the driver
   # instead of being masked by the log filters.
