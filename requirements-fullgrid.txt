@@ -23,3 +23,5 @@ statsmodels==0.14.4
 
 # CD-NOD baseline (cdnod_baseline.py, tools/run_cdnod.py)
 causal-learn==0.1.4.0
+# DAGMA per-window baseline (--ablation_methods ...,dagma)
+dagma==1.1.1

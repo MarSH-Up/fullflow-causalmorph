@@ -840,5 +840,47 @@ class SkeletonColumns(unittest.TestCase):
         self.assertGreaterEqual(row["mean_skeleton_f1"] + 1e-9, row["mean_struct_f1"] - 0.0015)
 
 
+class DagmaPerWindow(unittest.TestCase):
+    """DAGMA (linear, Bello et al. 2022) as a per-window learner on the detected windows."""
+
+    def test_default_methods_unchanged(self):
+        from full_pipeline import extract_causal_structures_ablation, ABLATION_METHODS
+        X, names, true_cps, *_ = _tiny_scenario()
+        r = extract_causal_structures_ablation(X, true_cps, names, verbose=False, window_overlap=0.0)
+        self.assertEqual(tuple(r), ABLATION_METHODS)
+
+    def test_dagma_recovers_chain_in_truth_convention(self):
+        from full_pipeline import extract_causal_structures_ablation, compute_shd
+        X, names, A = AdjacencyConvention._chain_sem()
+        r = extract_causal_structures_ablation(X, [], names, verbose=False, window_overlap=0.0, methods=("dagma",))
+        self.assertEqual(list(r), ["dagma"])
+        s = r["dagma"][0]
+        self.assertEqual(compute_shd(s.adjacency_matrix, A)["F1"], 1.0)     # A is [from, to]
+        self.assertEqual(sorted(s.causal_order), [0, 1, 2])
+
+    def test_unknown_method_rejected(self):
+        from full_pipeline import extract_causal_structures_ablation
+        X, names, A = AdjacencyConvention._chain_sem()
+        with self.assertRaises(ValueError):
+            extract_causal_structures_ablation(X, [], names, verbose=False, methods=("notears",))
+
+    def test_row_and_cli(self):
+        import subprocess
+        out = subprocess.run([sys.executable, "run_experiments.py", "--help"], capture_output=True, text=True, cwd=ROOT).stdout
+        self.assertIn("--ablation_methods", out)
+        from run_experiments import run_loaded
+        X, names, true_cps, true_adjs, sizes = _tiny_scenario()
+        meta = dict(scenario_id="t", p=3, n_regimes=2, n_changes=1, samples_regime=500,
+                    base_pconn=0.5, noise_fraction=0.02, seed=11)
+        row = run_loaded(X, names, true_cps, true_adjs, sizes, min_samples=500, meta=meta,
+                         window_overlap=0.0, detector_version="v1L", corr_gamma=2.5, prior_mode="cold",
+                         hybrid=False, bootstrap_n=0, bootstrap_threshold=0.6, chain_prior_threshold=0.05,
+                         run_ablation=True, transform="v2cap", learner="icalingam", ablation_methods=("dagma",))
+        self.assertEqual(row["status"], "ok", row.get("error_msg"))
+        for k in ("dagma_windowed_nshd_weighted", "dagma_mean_f1", "dagma_mean_skeleton_f1", "dagma_transition_f1"):
+            self.assertIn(k, row)
+        self.assertNotIn("icalingam_mean_f1", row)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -24,7 +24,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import networkx as nx
 from dataclasses import dataclass, field
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 
 from lingam import DirectLiNGAM, ICALiNGAM
 
@@ -1093,7 +1093,31 @@ def extract_causal_structures(
 
 
 # ── Multi-algorithm ablation ─────────────────────────────────────────────────
-ABLATION_METHODS = ("directlingam", "icalingam")
+ABLATION_METHODS = ("directlingam", "icalingam")            # default per-window learners
+ABLATION_CHOICES = ("directlingam", "icalingam", "dagma")    # dagma: DagmaLinear, Bello et al. NeurIPS 2022
+
+
+def _fit_window_learner(method: str, window_df: pd.DataFrame, variable_names: List[str], seed: int):
+    """One per-window learner on the raw window. Returns (A[from, to] DataFrame, causal order)."""
+    if method == "directlingam":
+        m = DirectLiNGAM(); m.fit(window_df)
+        return pd.DataFrame(_from_lingam(m.adjacency_matrix_), columns=variable_names, index=variable_names), list(m.causal_order_)
+    if method == "icalingam":
+        # FastICA's initialisation is random; seeded so a scenario gives the same row on every run.
+        m = ICALiNGAM(max_iter=3000, random_state=seed)
+        m.fit(window_df)
+        return pd.DataFrame(_from_lingam(m.adjacency_matrix_), columns=variable_names, index=variable_names), list(m.causal_order_)
+    if method == "dagma":
+        # Linear DAGMA with the package defaults (l2 loss, lambda1 0.03, w_threshold 0.3) on the raw
+        # window, as the per-window learners above. W[i, j] is the effect of i on j: already [from, to].
+        import contextlib, io
+        from dagma.linear import DagmaLinear
+        with contextlib.redirect_stderr(io.StringIO()):          # its progress bar
+            W = DagmaLinear(loss_type="l2").fit(window_df.to_numpy(dtype=float), lambda1=0.03, w_threshold=0.3)
+        G = nx.from_numpy_array((np.abs(W) > 0).astype(int), create_using=nx.DiGraph)
+        order = list(nx.topological_sort(G)) if nx.is_directed_acyclic_graph(G) else list(range(len(variable_names)))
+        return pd.DataFrame(W, columns=variable_names, index=variable_names), order
+    raise ValueError(f"unknown per-window learner {method!r}; choose from {ABLATION_CHOICES}")
 
 
 def extract_causal_structures_ablation(
@@ -1106,15 +1130,17 @@ def extract_causal_structures_ablation(
     verbose: bool = True,
     prior_mode: str = "chain",
     seed: int = 0,
+    methods: Tuple[str, ...] = ABLATION_METHODS,
 ) -> Dict[str, List[RegimeStructure]]:
     """
     Run the baseline structure learners on each detected window and return
     separate structure lists for side-by-side comparison.
 
-    Methods
+    Methods (``methods``, default ABLATION_METHODS)
     -------
     directlingam  : DirectLiNGAM on raw window data   (no transform, no prior)
     icalingam     : ICA-LiNGAM on raw window data     (no transform, no prior)
+    dagma         : linear DAGMA on raw window data   (no transform, no prior)
 
     The "causalmorph" arm that used to live here was the pipeline with
     bootstrap_n=0 — the baseline arm of the extraction ablation computed a
@@ -1138,7 +1164,10 @@ def extract_causal_structures_ablation(
         new_start = max(raw_windows[i][0] - overlap, prev_start)
         windows.append((new_start, raw_windows[i][1]))
 
-    results: Dict[str, List[RegimeStructure]] = {m: [] for m in ABLATION_METHODS}
+    bad = [m for m in methods if m not in ABLATION_CHOICES]
+    if bad:
+        raise ValueError(f"unknown per-window learner(s) {bad}; choose from {ABLATION_CHOICES}")
+    results: Dict[str, List[RegimeStructure]] = {m: [] for m in methods}
 
     for regime_idx, (start, end) in enumerate(windows):
         n_samples = end - start
@@ -1147,25 +1176,13 @@ def extract_causal_structures_ablation(
 
         window_df = pd.DataFrame(X[start:end], columns=variable_names)
 
-        model_dl = DirectLiNGAM()
-        model_dl.fit(window_df)
-        adj_dl = pd.DataFrame(_from_lingam(model_dl.adjacency_matrix_), columns=variable_names, index=variable_names)
-        results["directlingam"].append(RegimeStructure(
-            regime_idx=regime_idx, window_start=start, window_end=end,
-            n_samples=n_samples, causal_order=model_dl.causal_order_,
-            adjacency_matrix=adj_dl, used_prior=False, prior_source="cold",
-        ))
-
-        # ICA-LiNGAM's FastICA initialisation is random; seed it so a scenario
-        # produces the same row on every run.
-        model_ica = ICALiNGAM(max_iter=3000, random_state=seed + regime_idx)
-        model_ica.fit(window_df)
-        adj_ica = pd.DataFrame(_from_lingam(model_ica.adjacency_matrix_), columns=variable_names, index=variable_names)
-        results["icalingam"].append(RegimeStructure(
-            regime_idx=regime_idx, window_start=start, window_end=end,
-            n_samples=n_samples, causal_order=model_ica.causal_order_,
-            adjacency_matrix=adj_ica, used_prior=False, prior_source="cold",
-        ))
+        for method in methods:
+            adj, order = _fit_window_learner(method, window_df, variable_names, seed + regime_idx)
+            results[method].append(RegimeStructure(
+                regime_idx=regime_idx, window_start=start, window_end=end,
+                n_samples=n_samples, causal_order=order,
+                adjacency_matrix=adj, used_prior=False, prior_source="cold",
+            ))
 
     return results
 
@@ -2098,7 +2115,7 @@ def run_full_pipeline(
         print("\n" + "=" * 70)
         print("ABLATION COMPARISON  (same windows, different algorithms)")
         print("=" * 70)
-        for method in ABLATION_METHODS:
+        for method in ablation_results:
             structs_m = ablation_results.get(method, [])
             metrics_m = [s.shd_metrics for s in structs_m if s.shd_metrics]
             if metrics_m:

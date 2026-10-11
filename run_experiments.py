@@ -289,7 +289,7 @@ def _extract_metrics(
     # ── Ablation: DirectLiNGAM and ICA-LiNGAM ────────────────────────────────
     ablation_out = {}
     if "ablation" in result and result["ablation"]:
-        for method in ABLATION_METHODS:
+        for method in result["ablation"]:
             structs_m = result["ablation"].get(method, [])
             metrics_m = [s.shd_metrics for s in structs_m if s.shd_metrics]
             if metrics_m:
@@ -382,6 +382,7 @@ def run_loaded(
     legacy_postprocessing: bool = False,
     learner: str = "directlingam",
     transform: str = "v1",
+    ablation_methods: tuple = ABLATION_METHODS,
 ) -> dict:
     """
     Run the pipeline on an already-loaded scenario. Returns a flat metrics dict.
@@ -478,6 +479,7 @@ def run_loaded(
                 ablation_results = extract_causal_structures_ablation(
                     X=X, detected_change_points=cps_ext, variable_names=variable_names,
                     window_overlap=window_overlap, verbose=False, seed=seed,
+                    methods=tuple(ablation_methods),
                 )
                 for structs_m in ablation_results.values():
                     for s_ in structs_m:
@@ -913,6 +915,9 @@ if __name__ == "__main__":
                      help="Matching tolerance (samples) for detection precision/recall")
     exp.add_argument("--no_ablation",          action="store_true",
                      help="Skip the DirectLiNGAM / ICA-LiNGAM per-window baselines")
+    exp.add_argument("--ablation_methods",     type=str, default=",".join(ABLATION_METHODS),
+                     help="comma-separated per-window learners on the detected windows "
+                          "(directlingam, icalingam, dagma); default directlingam,icalingam")
     exp.add_argument("--learner",              type=str, default="directlingam", choices=["directlingam", "icalingam"],
                      help="structure learner fitted after CausalMorph (and used for the cold prior)")
     exp.add_argument("--transform",            type=str, default="v1", choices=["v1", "v2", "lite", "v2cap", "litecap", "none"],
@@ -948,4 +953,5 @@ if __name__ == "__main__":
         legacy_postprocessing=args.legacy_postprocessing,
         learner=args.learner,
         transform=args.transform,
+        ablation_methods=tuple(m.strip() for m in args.ablation_methods.split(",") if m.strip()),
     )
