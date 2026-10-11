@@ -323,10 +323,10 @@ Overrides: `WORKERS=32`, `BATCH_SIZE=128` (scenarios per batch; every runner app
 |---|---|---|---|
 | `main` (pipeline + 3 per-window learners incl. DAGMA) | 15–20 min | 7.5–10 h | 30–40 h |
 | `cdnod_fz` | < 1 min | ~15 min | ~1 h |
-| `lite`, `v1` | ~4–5 min each | ~2–2.5 h each | ~16–20 h together |
+| `lite` | ~4–5 min | ~2–2.5 h | ~8–10 h |
 | `cdnod_kci` | ~3 h (600 held-out scenarios) | — | ~12 h |
 
-About 60–75 h in total at 12 workers; roughly halves at 24.
+About 50–65 h in total at 12 workers on the M4 Max; on the 64-core server at 60 workers, roughly 20–25 h.
 
 **Output.** `results/full_v2/<cell>/<arm>/results.csv`; `results/full_v2/analysis/`: `arms.csv`, `paired.csv` and `breakdown.csv` (windowed nSHD and F1, column `metric`), `detection.csv`, figures H, I, J (pipeline and ablations) and M, N (external methods). `results/full_v2/summary.txt` is the printed report. Mid-run: `python tools/analyze_full_v2.py --root results/full_v2`.
 
