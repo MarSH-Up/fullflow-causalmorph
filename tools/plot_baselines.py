@@ -114,8 +114,7 @@ def main():
     axes[0].set_yticks(ys, [l for _, l in cells])
     h_, l_ = axes[0].get_legend_handles_labels()
     fig.legend(h_, l_, loc="lower left", bbox_to_anchor=(0.01, 0.0), ncol=3, fontsize=9.5)
-    fig.suptitle("Pipeline against per-window learners on the same detected windows and against CD-NOD, "
-                 "same 600 scenarios per cell (a method appears once it has run on all of them)",
+    fig.suptitle("Pipeline vs per-window learners (same detected windows) and CD-NOD, same 600 scenarios per cell",
                  x=0.01, ha="left", fontsize=12, fontweight="bold")
     fig.tight_layout(rect=(0, 0.09, 1, 0.95))
     fig.savefig(os.path.join(OUT, "M_baselines.png"), dpi=200); plt.close(fig)
