@@ -6,6 +6,7 @@ plus dataset generation and disk usage.
 
     python tools/full_status.py                  # results/full_v2
     python tools/full_status.py --out /tmp/smoke
+    watch -n 30 .venv/bin/python tools/full_status.py     # live, refreshed every 30 s
 """
 import argparse
 import datetime as dt
@@ -70,8 +71,13 @@ def main():
     for c in cells:
         ds = "datasets" if c == "lin_laplace" else f"datasets_full_{c}"
         idx = os.path.join(ds, "index.csv")
-        n = sum(1 for _ in open(idx)) - 1 if os.path.exists(idx) else 0
-        print(f"  {c:<16} {ds:<30} {n:>6} / {a.expected} scenarios {'ready' if n >= a.expected else 'generating' if n else 'pending'}")
+        if os.path.exists(idx):
+            n = sum(1 for _ in open(idx)) - 1
+            state = "ready" if n >= a.expected else "incomplete"
+        else:   # the generator writes index.csv last: count the scenario files written so far
+            n = sum(1 for e in os.scandir(ds) if e.name.endswith("-dat.csv")) if os.path.isdir(ds) else 0
+            state = "generating" if n else "pending"
+        print(f"  {c:<16} {ds:<30} {n:>6} / {a.expected} scenarios {state}")
 
     head = f"{'#':>2}  {'step':<26}{'cell':<16}{'done':>14}{'%':>7}{'errors':>8}{'rate/h':>9}{'left':>10}  status"
     print("\n" + head + "\n" + "-" * len(head))
