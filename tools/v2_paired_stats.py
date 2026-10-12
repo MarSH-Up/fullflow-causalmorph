@@ -20,7 +20,9 @@ rng = np.random.default_rng(0)
 def paired_stats(a, b, n_boot=2000):
     d = (a - b).dropna(); n = len(d); nz = d[d != 0]
     p = wilcoxon(nz).pvalue if len(nz) else 1.0
-    boot = [d.sample(n, replace=True, random_state=int(rng.integers(1e9))).mean() for _ in range(n_boot)]
+    v = d.to_numpy(float)
+    boot = np.concatenate([v[rng.integers(0, n, (k, n))].mean(axis=1)
+                           for k in np.diff(np.r_[0:n_boot:200, n_boot])]) if n else np.array([np.nan])
     lo, hi = np.percentile(boot, [2.5, 97.5])
     w, l, t = int((d > 0).sum()), int((d < 0).sum()), int((d == 0).sum())
     return n, d.mean(), lo, hi, p, w, l, t, (w - l) / max(w + l, 1)
