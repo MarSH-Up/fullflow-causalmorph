@@ -105,6 +105,32 @@ class ExtractionWindows(unittest.TestCase):
         self.assertEqual(absorbed, [200])
 
 
+class StructureConfirmedChangePoints(unittest.TestCase):
+    """A boundary is reported only when the graphs on both sides differ."""
+
+    def test_keeps_boundaries_whose_graphs_differ_by_at_least_min_diff(self):
+        from types import SimpleNamespace
+        from run_experiments import structure_confirmed_cps
+        a = np.zeros((3, 3)); b = a.copy(); b[0, 1] = 1; c = b.copy(); c[1, 2] = c[2, 0] = 1
+        ws = [SimpleNamespace(window_start=s, adjacency_matrix=pd.DataFrame(m))
+              for s, m in ((1000, b), (0, a), (2000, b), (3000, c))]   # unsorted on purpose
+        self.assertEqual(structure_confirmed_cps(ws, 1), [1000, 3000])  # 2000 splits graph b
+        self.assertEqual(structure_confirmed_cps(ws, 2), [3000])
+        self.assertEqual(structure_confirmed_cps(ws[:1], 1), [])
+
+    def test_chow_confirms_a_weight_change_but_not_a_split_regime(self):
+        from types import SimpleNamespace
+        from run_experiments import chow_confirmed_cps
+        rng = np.random.default_rng(3)
+        e = rng.laplace(size=(3000, 2))
+        w = np.r_[np.full(2000, 0.8), np.full(1000, -0.5)]          # weight changes at 2000, same graph
+        X = np.c_[e[:, 0], w * e[:, 0] + e[:, 1]]
+        adj = pd.DataFrame([[0, 1], [0, 0]])                         # V1 -> V2 in every window
+        ws = [SimpleNamespace(window_start=s, window_end=t, adjacency_matrix=adj)
+              for s, t in ((0, 1000), (1000, 2000), (2000, 3000))]
+        self.assertEqual(chow_confirmed_cps(X, ws, 0.01), [2000])
+
+
 class MinWindowRule(unittest.TestCase):
     def test_linear_rule_with_floor(self):
         from run_experiments import min_window_for
@@ -573,6 +599,12 @@ class RunOneFlags(unittest.TestCase):
         self.assertEqual(row["det_recall"], 1.0)
         self.assertEqual(row["n_structures"], 1)
         self.assertEqual(row["n_cps_merged"], 1)
+
+    def test_rows_carry_structure_confirmed_detection(self):
+        row = self._row(oracle_segmentation=True)
+        for k in (1, 2, 3):
+            self.assertEqual(row[f"conf{k}_tp"] + row[f"conf{k}_fn"], 1)   # one true change point
+            self.assertLessEqual(row[f"conf{k}_n"], row["n_structures"] - 1)
 
 
 class LegacyPostprocessing(unittest.TestCase):

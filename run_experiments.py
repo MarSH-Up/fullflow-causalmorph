@@ -191,6 +191,71 @@ def extraction_windows(cps: List[int], T: int, n_min: int):
     return cps, absorbed
 
 
+CONFIRM_MIN_DIFF = (1, 2, 3)
+
+
+def structure_confirmed_cps(structures, min_diff: int) -> List[int]:
+    """
+    Boundaries between consecutive extraction windows whose estimated graphs
+    differ in at least min_diff adjacency entries. A boundary with the same
+    graph on both sides splits one regime, so it is not reported as a change
+    of causal structure; extraction still uses every window.
+    """
+    ws = sorted(structures, key=lambda s: s.window_start)
+    return [int(b.window_start) for a, b in zip(ws[:-1], ws[1:])
+            if int((np.asarray(a.adjacency_matrix) != np.asarray(b.adjacency_matrix)).sum()) >= min_diff]
+
+
+CHOW_ALPHAS = (0.01, 0.001)
+
+
+def _rss(y, Z):
+    beta, *_ = np.linalg.lstsq(Z, y, rcond=None)
+    r = y - Z @ beta
+    return float(r @ r)
+
+
+def boundary_min_pvalue(X, a, b) -> float:
+    """
+    Smallest Chow-test p-value, over nodes, for a change in the regression of
+    each node on its estimated parents (union of both windows' parents,
+    adjacency [from, to]) between window a and the next window b. Nodes with
+    no parent in either window are skipped; 1.0 when none is testable.
+    """
+    from scipy.stats import f as f_dist
+    Xa, Xb = X[a.window_start:a.window_end], X[b.window_start:b.window_end]
+    A = np.asarray(a.adjacency_matrix) != 0
+    B = np.asarray(b.adjacency_matrix) != 0
+    best = 1.0
+    for j in range(X.shape[1]):
+        par = np.flatnonzero(A[:, j] | B[:, j])
+        if par.size == 0:
+            continue
+        k = par.size + 1
+        Za = np.c_[np.ones(len(Xa)), Xa[:, par]]; Zb = np.c_[np.ones(len(Xb)), Xb[:, par]]
+        dof = len(Xa) + len(Xb) - 2 * k
+        if dof <= 0:
+            continue
+        rss_sep = _rss(Xa[:, j], Za) + _rss(Xb[:, j], Zb)
+        rss_pool = _rss(np.r_[Xa[:, j], Xb[:, j]], np.r_[Za, Zb])
+        F = max(rss_pool - rss_sep, 0.0) / k / max(rss_sep / dof, 1e-300)
+        best = min(best, float(f_dist.sf(F, k, dof)))
+    return best
+
+
+def chow_confirmed_cps(X, structures, alpha: float) -> List[int]:
+    """
+    Boundaries where some node's regression on its estimated parents changes
+    (Chow test, Bonferroni over the p nodes at level alpha). Within one regime
+    the two sides share the same mechanisms, so a split of a regime is not
+    confirmed; a change of weights alone is.
+    """
+    ws = sorted(structures, key=lambda s: s.window_start)
+    p = X.shape[1]
+    return [int(b.window_start) for a, b in zip(ws[:-1], ws[1:])
+            if boundary_min_pvalue(X, a, b) < alpha / p]
+
+
 # ── Metric extraction ─────────────────────────────────────────────────────────
 
 def _mean_skeleton_f1(structs) -> float:
@@ -527,6 +592,19 @@ def run_loaded(
             "prior_mode":         prior_mode,
             "transform":          transform,
             "n_transform_failed": int(sum(1 for s in structures if getattr(s, "transform_failed", False))),
+        })
+        for k in CONFIRM_MIN_DIFF:
+            conf = structure_confirmed_cps(structures, k)
+            ev = evaluate_detection(true_cps, conf, tolerance=det_tolerance)
+            row.update({f"conf{k}_n": len(conf), f"conf{k}_tp": ev.true_positives,
+                        f"conf{k}_fp": ev.false_positives, f"conf{k}_fn": ev.false_negatives})
+        for alpha in CHOW_ALPHAS:
+            conf = chow_confirmed_cps(np.asarray(X, float), structures, alpha)
+            ev = evaluate_detection(true_cps, conf, tolerance=det_tolerance)
+            tag = f"chow{alpha:g}".replace(".", "")
+            row.update({f"{tag}_n": len(conf), f"{tag}_tp": ev.true_positives,
+                        f"{tag}_fp": ev.false_positives, f"{tag}_fn": ev.false_negatives})
+        row.update({
             "status":             "ok",
             "error_msg":          "",
         })
