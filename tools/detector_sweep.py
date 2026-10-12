@@ -9,6 +9,8 @@ detector finds nothing) is not run; such scenarios are counted as `empty`.
 --combos gP:gS adds the "both" rule: a change point is kept only when Pearson
 (at gamma gP) and Spearman (at gamma gS) each find one within one window W of
 it; it is placed where Pearson put it ("both_p") or where Spearman did ("both_s").
+--unions gP:gS adds the "union" rule (v1O): every Pearson change point, plus the
+Spearman ones with no Pearson change point within W.
 
     python tools/detector_sweep.py --dataset_dir datasets_v2_nonlin_laplace \
         --scenario_ids_file results/hardening_validation/sample_ids.txt \
@@ -36,7 +38,12 @@ def _both(cps_a, cps_b, radius):
     return [c for c in cps_a if any(abs(c - d) <= radius for d in cps_b)]
 
 
-def _job(sid, index_row, dataset_dir, gammas, tolerance, detectors, combos=()):
+def _union(cps_a, cps_b, radius):
+    """cps_a plus the change points of cps_b that have none of cps_a within radius."""
+    return sorted(list(cps_a) + [c for c in cps_b if not any(abs(c - d) <= radius for d in cps_a)])
+
+
+def _job(sid, index_row, dataset_dir, gammas, tolerance, detectors, combos=(), unions=()):
     import warnings as _w
     _w.filterwarnings("ignore")
     from detectors.detectors_correlation import detect_correlation_changes
@@ -73,6 +80,8 @@ def _job(sid, index_row, dataset_dir, gammas, tolerance, detectors, combos=()):
         pear, spear = cps_for("v1L", gp), cps_for("v1M", gs)
         score("both_p", f"{gp}:{gs}", _both(pear, spear, window))
         score("both_s", f"{gp}:{gs}", _both(spear, pear, window))
+    for gp, gs in unions:
+        score("union", f"{gp}:{gs}", _union(cps_for("v1L", gp), cps_for("v1M", gs), window))
     return rows
 
 
@@ -97,17 +106,19 @@ def main():
     ap.add_argument("--gammas", type=float, nargs="+", default=[2.0, 2.5, 3.0, 3.5])
     ap.add_argument("--detectors", nargs="*", choices=list(VARIANTS), default=list(VARIANTS))
     ap.add_argument("--combos", nargs="*", default=[], help="gP:gS pairs for the 'both' rule, e.g. 2.5:2.0")
+    ap.add_argument("--unions", nargs="*", default=[], help="gP:gS pairs for the 'union' rule, e.g. 2.5:2.0")
     ap.add_argument("--tolerance", type=int, default=200)
     ap.add_argument("--workers", type=int, default=12)
     a = ap.parse_args()
     combos = [tuple(float(v) for v in c.split(":")) for c in a.combos]
+    unions = [tuple(float(v) for v in c.split(":")) for c in a.unions]
 
     index = pd.read_csv(os.path.join(a.dataset_dir, "index.csv"), dtype=str)
     if a.scenario_ids_file:
         keep = {ln.strip() for ln in open(a.scenario_ids_file) if ln.strip()}
         index = index[index.scenario_id.isin(keep)]
     with ProcessPoolExecutor(max_workers=a.workers) as ex:
-        futs = [ex.submit(_job, r.scenario_id, r, a.dataset_dir, a.gammas, a.tolerance, a.detectors, combos) for _, r in index.iterrows()]
+        futs = [ex.submit(_job, r.scenario_id, r, a.dataset_dir, a.gammas, a.tolerance, a.detectors, combos, unions) for _, r in index.iterrows()]
         rows = [row for f in futs for row in f.result()]
     df = pd.DataFrame(rows)
     df.to_csv(a.out, index=False)

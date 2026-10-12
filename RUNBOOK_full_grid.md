@@ -288,14 +288,14 @@ Four cells (linear/nonlinear × Laplace/Gaussian) of the 18,000-scenario grid:
 
 | arm | what runs | scenarios |
 |---|---|---|
-| `main` | pipeline with every change: v1N detection (Pearson and Spearman must agree), v2 with the Stage I cap (`v2cap`) + ICA-LiNGAM, cold prior; plus, on the same detected windows, DirectLiNGAM, ICA-LiNGAM and DAGMA (linear) alone (`MAIN_ABLATION`) | all |
+| `main` | pipeline with every change: v1O detection (union of Pearson and Spearman change points), v2 with the Stage I cap (`v2cap`) + ICA-LiNGAM, cold prior; plus, on the same detected windows, DirectLiNGAM, ICA-LiNGAM and DAGMA (linear) alone (`MAIN_ABLATION`) | all |
 | `cdnod_fz` | CD-NOD (Huang et al. 2020), Fisher-z, C = time index, one graph for the series | all |
 | `lite` | `litecap` + ICA-LiNGAM (isolates the new Stage II) | all |
 | `v1` (optional, no longer run by default) | published CausalMorph + chain prior + DirectLiNGAM (the October pipeline, corrected convention) | all |
 | `cdnod_kci` | CD-NOD with KCI (the paper's test) on a 500-row time-uniform subsample | `KCI_N` = 600 held-out scenarios, stratified by p, regimes and samples |
 | `v2` (optional) | v2 without the Stage I cap + ICA-LiNGAM (isolates the cap) | all |
 
-Shared by the pipeline arms: v1N (a Spearman change point at γ 1.5 is kept when Pearson at γ 2.0 has one within a window), no hybrid, no bootstrap, no overlap. Default order (`run_full_experiments.py`): `main cdnod_fz lite cdnod_kci`; add `--arms ... v1` or `v2` to include the optional arms.
+Shared by the pipeline arms: v1O (every Pearson change point at γ 2.5, plus the Spearman ones at γ 1.5 with no Pearson point within a window), no hybrid, no bootstrap, no overlap. Default order (`run_full_experiments.py`): `main cdnod_fz lite cdnod_kci`; add `--arms ... v1` or `v2` to include the optional arms.
 
 **Held-out evaluation.** The analysis excludes the 600 scenarios the method was tuned on (`results/hardening_validation/sample_ids.txt`, `EXCLUDE_IDS`), so the numbers come from the other 17,400. CD-NOD with KCI draws its 600 scenarios from the held-out ones (`<run>/kci_ids.txt`).
 

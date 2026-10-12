@@ -28,7 +28,7 @@
 # assigns regimes from lagged prediction errors and failed to converge on every
 # probe with contemporaneous structure (2026-10-10).
 #
-# Shared by the pipeline arms: v1N detector (Pearson gamma 2.0 and Spearman gamma 1.5 must agree), no hybrid, no
+# Shared by the pipeline arms: v1O detector (Pearson gamma 2.5 plus Spearman gamma 1.5), no hybrid, no
 # bootstrap, no window overlap. Arms run in the order of ARMS across all
 # cells, so the proposed pipeline and the cheap baselines finish first.
 #
@@ -87,7 +87,7 @@ gen_flags () {
   esac
 }
 
-PIPE_COMMON=(--detector v1N --corr_gamma 2.0 --corr_gamma_rank 1.5 --no-hybrid --chain_prior_threshold 0.05 --bootstrap_n 0 --window_overlap 0.0)
+PIPE_COMMON=(--detector v1O --corr_gamma 2.5 --corr_gamma_rank 1.5 --no-hybrid --chain_prior_threshold 0.05 --bootstrap_n 0 --window_overlap 0.0)
 
 arm_cmd () {   # prints nothing; fills the global CMD array for arm $1 on dataset $2, output $3
   local arm="$1" ds="$2" dir="$3"

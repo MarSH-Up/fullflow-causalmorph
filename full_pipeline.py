@@ -557,6 +557,13 @@ def detect_change_points(
               but adds some on linear data; the two disagree on different
               false alarms, so requiring both keeps v1L's precision on linear
               data and v1M's on nonlinear data, at a lower gamma for each.
+      "v1O" — union of v1L (Pearson, gamma = corr_gamma) and v1M (Spearman,
+              gamma = corr_gamma_rank): every Pearson change point, plus the
+              Spearman ones with no Pearson change point within one window.
+              For extraction a missed change costs far more than a false one
+              (a missed change mixes two graphs in one window; a false one
+              splits a regime whose halves share its graph), so v1O trades
+              precision for recall.
       "v1I" — ensemble: v1G + wavelet-coherence-based detector.
               Generalises v1H by replacing Pearson correlation with squared
               wavelet coherence (Grinsted et al., 2004) — frequency-resolved
@@ -581,7 +588,7 @@ def detect_change_points(
     step_win = max(100, min_regime_len // 5)   # 500→100, 2500→500, 5000→1000
     ch_win   = max(160, min_regime_len // 5)   # 500→160, 2500→500, 5000→1000
 
-    if detector_version in ("v1G", "v1H", "v1I", "v1J", "v1K", "v1L", "v1M", "v1N"):  # all use v1G as their wavelet base
+    if detector_version in ("v1G", "v1H", "v1I", "v1J", "v1K", "v1L", "v1M", "v1N", "v1O"):  # all use v1G as their wavelet base
         result = detect_nonstationarity_v1G(
             X,
             baseline_idx,
@@ -621,7 +628,7 @@ def detect_change_points(
             seed=seed,
         )
 
-    if detector_version in ("v1H", "v1J", "v1K", "v1L", "v1M", "v1N"):
+    if detector_version in ("v1H", "v1J", "v1K", "v1L", "v1M", "v1N", "v1O"):
         # v1H detector: correlation-based change-point detection.
         # Tracks INTER-channel correlation shifts via Frobenius distance —
         # the signal that actually changes when the causal graph rewires.
@@ -646,11 +653,11 @@ def detect_change_points(
                 baseline_idx=baseline_idx,
                 threshold_mad_k=6.0,      # stricter peak threshold (default 4.0)
                 min_threshold=0.5,        # higher floor (default 0.3)
-                statistic="max" if detector_version in ("v1J", "v1K", "v1L", "v1M", "v1N") else "frobenius",
+                statistic="max" if detector_version in ("v1J", "v1K", "v1L", "v1M", "v1N", "v1O") else "frobenius",
                 gamma=gamma,
                 adaptive_null=adaptive_null,
-                studentize=detector_version in ("v1K", "v1L", "v1M", "v1N"),
-                refine_scale=detector_version in ("v1L", "v1M", "v1N"),
+                studentize=detector_version in ("v1K", "v1L", "v1M", "v1N", "v1O"),
+                refine_scale=detector_version in ("v1L", "v1M", "v1N", "v1O"),
                 rank=rank,
             )
             return cps
@@ -659,6 +666,10 @@ def detect_change_points(
             pearson = _corr_cps(corr_gamma, rank=False)
             corr_cps = [c for c in _corr_cps(corr_gamma_rank, rank=True)
                         if any(abs(c - d) <= corr_window for d in pearson)]
+        elif detector_version == "v1O":
+            pearson = _corr_cps(corr_gamma, rank=False)
+            corr_cps = pearson + [c for c in _corr_cps(corr_gamma_rank, rank=True)
+                                  if not any(abs(c - d) <= corr_window for d in pearson)]
         else:
             corr_cps = _corr_cps(corr_gamma, rank=(detector_version == "v1M"))
 
