@@ -11,7 +11,7 @@
 #   nonlin_normal    nonlinear   normal    datasets_full_nonlin_normal/
 #
 #   arm        what runs                                              scenarios
-#   main       pipeline with every change: v1L detection, v2 with     all
+#   main       pipeline with every change: v1O detection, v2 with     all
 #              the Stage I cap (v2cap), ICA-LiNGAM, cold prior; plus
 #              on the SAME detected windows: DirectLiNGAM, ICA-LiNGAM
 #              and DAGMA (linear) alone (MAIN_ABLATION)
@@ -31,6 +31,13 @@
 # Shared by the pipeline arms: v1O detector (Pearson gamma 2.5 plus Spearman gamma 1.5), no hybrid, no
 # bootstrap, no window overlap. Arms run in the order of ARMS across all
 # cells, so the proposed pipeline and the cheap baselines finish first.
+#
+# Detector window: by default the detector sizes its windows from the shortest
+# true regime of each scenario. FIXED_MIN_REGIME_LEN=<n> sizes them from a
+# single assumed lower bound instead (passed as --fixed_min_regime_len), for
+# the window-sensitivity run on held-out scenarios, e.g.
+#   WORKERS=36 ARMS=main FIXED_MIN_REGIME_LEN=500 \
+#   SCENARIO_IDS_FILE=results/full_20261012_1845/kci_ids.txt OUT=results/fixedW500 ./run_full_experiments.sh
 #
 # The analysis excludes the 600 scenarios used to tune the method
 # (results/hardening_validation/sample_ids.txt; EXCLUDE_IDS) so the reported
@@ -64,6 +71,7 @@ NONLIN="${NONLIN:-0.7}"; NONLIN_FUNC="${NONLIN_FUNC:-cube}"   # same mechanism a
 MAIN_ABLATION="${MAIN_ABLATION:-directlingam,icalingam,dagma}"
 EXCLUDE_IDS="${EXCLUDE_IDS:-results/hardening_validation/sample_ids.txt}"
 KCI_N="${KCI_N:-600}"; KCI_NSUB="${KCI_NSUB:-500}"
+FIXED_MIN_REGIME_LEN="${FIXED_MIN_REGIME_LEN:-}"   # empty: per-scenario min(true regime sizes)
 EXPECTED_SCENARIOS=18000
 LOG="$OUT/logs"; mkdir -p "$LOG"
 
@@ -88,6 +96,7 @@ gen_flags () {
 }
 
 PIPE_COMMON=(--detector v1O --corr_gamma 2.5 --corr_gamma_rank 1.5 --no-hybrid --chain_prior_threshold 0.05 --bootstrap_n 0 --window_overlap 0.0)
+[ -n "$FIXED_MIN_REGIME_LEN" ] && PIPE_COMMON+=(--fixed_min_regime_len "$FIXED_MIN_REGIME_LEN")
 
 arm_cmd () {   # prints nothing; fills the global CMD array for arm $1 on dataset $2, output $3
   local arm="$1" ds="$2" dir="$3"
@@ -178,7 +187,8 @@ run_arm () {
 echo "full experiments  cells: $CELLS  arms: $ARMS  workers: $WORKERS  out: $OUT  $(date '+%F %H:%M')"
 { echo "git: $(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
   echo "cells: $CELLS | arms: $ARMS | ids: ${SCENARIO_IDS_FILE:-all} | per-window learners: $MAIN_ABLATION"
-  echo "kci: $KCI_N held-out scenarios, $KCI_NSUB-row subsample | analysis excludes: $EXCLUDE_IDS"; } | tee "$OUT/RUN_INFO.txt"
+  echo "kci: $KCI_N held-out scenarios, $KCI_NSUB-row subsample | analysis excludes: $EXCLUDE_IDS"
+  echo "detector window: $([ -n "$FIXED_MIN_REGIME_LEN" ] && echo "fixed min_regime_len=$FIXED_MIN_REGIME_LEN" || echo "per-scenario min(true regime sizes)")"; } | tee "$OUT/RUN_INFO.txt"
 
 for cell in $CELLS; do start_generation "$cell"; done
 for arm in $ARMS; do
