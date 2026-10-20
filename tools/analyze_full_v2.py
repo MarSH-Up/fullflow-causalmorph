@@ -141,7 +141,7 @@ def main():
         fails = {arm: n_failed(root, cell, arm) for arm in ("main", "lite", "v2")}
         print(f"\n{label}  (scenarios: {len(main_df)};  transform fallbacks "
               + " ".join(f"{k}={v}" for k, v in fails.items() if v is not None) + ")")
-        print(f"  detection v1L: P={P:.3f} R={R:.3f} F1={F:.3f}")
+        print(f"  detection (main arm, raw): P={P:.3f} R={R:.3f} F1={F:.3f}")
         print(pd.DataFrame([r for r in arms_rows if r["cell"] == cell]).drop(columns="cell")
               .to_string(index=False, float_format=lambda v: f"{v:.3f}"))
 
