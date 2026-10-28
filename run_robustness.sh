@@ -75,6 +75,14 @@ done
 
 { echo "git: $(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
   echo "cells: $CELLS ($(grep -c . "$IDS") ids) | external: $DAGMA_DATA | fixed L: $FIXED_L | steps: $STEPS | workers: $WORKERS"; } | tee "$OUT/RUN_INFO.txt"
+# the plan read by tools/run_status.py: step, data, expected rows, in run order
+targets="$CELLS external"
+: > "$OUT/PLAN.tsv"
+for step in $STEPS; do for t in $targets; do
+  [ "$step" = cdnod ] && [ "$t" != external ] && continue
+  if [ "$t" = external ]; then n=$(( $(wc -l < "$DAGMA_DATA/index.csv") - 1 )); else n=$(grep -c . "$IDS"); fi
+  printf '%s\t%s\t%s\n' "$step" "$t" "$n" >> "$OUT/PLAN.tsv"
+done; done
 
 # ── arms ──────────────────────────────────────────────────────────────────────
 run () {   # name dir command...
@@ -88,7 +96,6 @@ run () {   # name dir command...
   echo "  -> $(( $(wc -l < "$dir/results.csv") - 1 )) rows in $(( (SECONDS - t0) / 60 )) min"
 }
 
-targets="$CELLS external"
 for step in $STEPS; do
   for t in $targets; do
     if [ "$t" = "external" ]; then ds="$DAGMA_DATA"; ids=(); else ds="$(dataset_for "$t")"; ids=(--scenario_ids_file "$IDS"); fi
