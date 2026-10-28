@@ -1160,11 +1160,13 @@ def extract_causal_structures(
 
 # ── Multi-algorithm ablation ─────────────────────────────────────────────────
 ABLATION_METHODS = ("directlingam", "icalingam")            # default per-window learners
-ABLATION_CHOICES = ("directlingam", "icalingam", "dagma", "dagma_paper", "sortnregress", "randomregress", "empty", "pc")
+ABLATION_CHOICES = ("directlingam", "icalingam", "dagma", "dagma_paper", "sortnregress", "randomregress", "r2sortnregress", "empty", "pc")
 # dagma: DagmaLinear (Bello et al., NeurIPS 2022) with the window rescaling below;
 # dagma_paper: DagmaLinear on the centred raw window with the hyperparameters of the paper (Appendix C.1.1);
 # sortnregress: order by marginal variance, then regress (Reisach et al., NeurIPS 2021), a variance-leak reference;
 # randomregress: the same regression on a random order, the orientation floor;
+# r2sortnregress: the order by increasing R^2 of each variable on all the others (Reisach et al.,
+#   NeurIPS 2023), a scale-invariant ordering leak that survives standardisation;
 # empty: the empty graph, a reference for the scoring;
 # pc: PC with Fisher-z (causal-learn), a CPDAG learner; unoriented edges are set in both directions;
 # dagma_l<lambda1>_t<threshold>: DAGMA with the paper's schedule and the given l1 weight and
@@ -1225,14 +1227,20 @@ def _fit_window_learner(method: str, window_df: pd.DataFrame, variable_names: Li
         G = nx.from_numpy_array((np.abs(W) > 0).astype(int), create_using=nx.DiGraph)
         order = list(nx.topological_sort(G)) if nx.is_directed_acyclic_graph(G) else list(range(len(variable_names)))
         return pd.DataFrame(W, columns=variable_names, index=variable_names), order
-    if method in ("sortnregress", "randomregress"):
+    if method in ("sortnregress", "randomregress", "r2sortnregress"):
         # Reisach et al. (2021): increasing marginal variance (or a random permutation) as the
         # causal order, then LassoLarsIC (BIC) of each node on its predecessors with adaptive weights.
         from sklearn.linear_model import LinearRegression, LassoLarsIC
         Xw = window_df.to_numpy(dtype=float)
         Xw = Xw - Xw.mean(axis=0)
-        order = (list(np.argsort(Xw.var(axis=0))) if method == "sortnregress"
-                 else list(np.random.default_rng(seed).permutation(Xw.shape[1])))
+        if method == "sortnregress":
+            order = list(np.argsort(Xw.var(axis=0)))
+        elif method == "r2sortnregress":
+            r2 = [LinearRegression().fit(np.delete(Xw, j, axis=1), Xw[:, j]).score(np.delete(Xw, j, axis=1), Xw[:, j])
+                  for j in range(Xw.shape[1])]
+            order = list(np.argsort(r2))
+        else:
+            order = list(np.random.default_rng(seed).permutation(Xw.shape[1]))
         W = np.zeros((Xw.shape[1], Xw.shape[1]))
         for k in range(1, len(order)):
             target, covs = order[k], order[:k]
