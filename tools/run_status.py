@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-Progress of run_robustness.sh or run_standardised.sh: one row per (step, data)
-of the run's PLAN.tsv, in run order, with rows done, percentage, errors, rate
-since that step started and time left; plus a rough estimate for the whole run.
+Progress of run_all.sh (run_robustness.sh, run_standardised.sh, run_review_extras.sh):
+for every run folder, one row per (step, data) of its PLAN.tsv, in run order, with
+rows done, percentage, errors, rate since that step started and time left, and
+the preliminary results of every step with rows.
 
-    python tools/run_status.py                                   # results/robustness
-    python tools/run_status.py --out results/standardised --log results/standardised.log
+    python tools/run_status.py                                   # the three runs of run_all.sh
+    python tools/run_status.py --out results/standardised        # one run
     watch -n 30 .venv/bin/python tools/run_status.py             # live, refreshed every 30 s
 """
 import argparse
@@ -62,23 +63,28 @@ def step_starts(log_path):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default="results/robustness")
-    ap.add_argument("--log", default=None, help="the runner's stdout log; default: <out>.log")
+    ap.add_argument("--out", nargs="+", default=["results/robustness", "results/standardised", "results/review_extras"])
     a = ap.parse_args()
-    plan_path = os.path.join(a.out, "PLAN.tsv")
+    for out in a.out:
+        show(out)
+
+
+def show(out):
+    plan_path = os.path.join(out, "PLAN.tsv")
     if not os.path.exists(plan_path):
-        raise SystemExit(f"no {plan_path}: the run has not started (or pass --out)")
+        print(f"\n{out}: not started\n")
+        return
     plan = [l.rstrip("\n").split("\t") for l in open(plan_path) if l.strip()]
-    starts = step_starts(a.log or a.out.rstrip("/") + ".log")
+    starts = step_starts(out.rstrip("/") + ".log")
     now = dt.datetime.now()
 
     head = f"{'#':>2}  {'step':<14}{'data':<16}{'done':>15}{'%':>7}{'errors':>8}{'rate/h':>9}{'left':>10}  status"
-    print(f"\n{a.out}   {now:%Y-%m-%d %H:%M}\n\n{head}\n{'-' * len(head)}")
+    print(f"\n{out}   {now:%Y-%m-%d %H:%M}\n\n{head}\n{'-' * len(head)}")
     done_rows = total_rows = 0
     results = []
     for k, (step, t, want) in enumerate(plan, 1):
         want = int(want)
-        n, err = count_rows(os.path.join(a.out, t, step, "results.csv"))
+        n, err = count_rows(os.path.join(out, t, step, "results.csv"))
         started = starts.get((t, step))
         rate = left = None
         if started and n:
@@ -90,7 +96,7 @@ def main():
         print(f"{k:>2}  {step:<14}{t:<16}{n:>7} / {want:<6}{100 * n / max(want, 1):>6.1f}%{err:>8}"
               f"{(f'{rate:,.0f}' if rate else '-'):>9}{fmt_h(left):>10}  {status}")
         if n:
-            results.append((k, step, t, status, prelim(os.path.join(a.out, t, step, "results.csv"))))
+            results.append((k, step, t, status, prelim(os.path.join(out, t, step, "results.csv"))))
 
     first = min(starts.values()) if starts else None
     eta = (now - first).total_seconds() / 3600 * (total_rows - done_rows) / done_rows if first and done_rows else None

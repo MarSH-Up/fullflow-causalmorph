@@ -28,6 +28,7 @@
 # Output: $OUT/<cell>/<step>/results.csv (each step resumes).
 #
 #   nohup ./run_standardised.sh > results/standardised.log 2>&1 &
+#   MAIN_N=3000 ... runs main and cdnod_fz on a stratified held-out sample of 3,000 per cell
 #   STEPS="main" CELLS="lin_laplace" WORKERS=40 ./run_standardised.sh
 #
 set -euo pipefail
@@ -41,6 +42,8 @@ CELLS="${CELLS:-lin_laplace nonlin_laplace lin_normal nonlin_normal}"
 STEPS="${STEPS:-oracle_seg oracle_L L1000 lite no_seg pelt cdnod_fz cdnod_kci main}"
 DATA_PREFIX="${DATA_PREFIX:-datasets_full_}"
 FIXED_L="${FIXED_L:-500}"
+MAIN_N="${MAIN_N:-0}"   # 0: every scenario in main and cdnod_fz; N: a stratified held-out sample of N per cell
+EXCLUDE_IDS="${EXCLUDE_IDS:-results/hardening_validation/sample_ids.txt}"
 IDS="$REF/kci_ids.txt"
 [ -f "$IDS" ] || { echo "missing $IDS" >&2; exit 1; }
 LOG="$OUT/logs"; mkdir -p "$LOG"
@@ -52,7 +55,17 @@ BASE=(--detector v1O --corr_gamma 2.5 --corr_gamma_rank 1.5 --no-hybrid --chain_
       --bootstrap_n 0 --window_overlap 0.0 --prior_mode cold --learner directlingam --standardize_windows)
 LEARNERS="directlingam,icalingam,dagma_paper,sortnregress,randomregress,empty"
 
-want_for () { if [ "$1" = main ] || [ "$1" = cdnod_fz ]; then echo $(( $(wc -l < "$(dataset_for "$2")/index.csv") - 1 )); else grep -c . "$IDS"; fi; }
+MAIN_IDS=()
+if [ "$MAIN_N" -gt 0 ]; then
+  [ -f "$OUT/main_ids.txt" ] || "$PYTHON" tools/stratified_ids.py --index datasets/index.csv --n "$MAIN_N" \
+      --exclude "$EXCLUDE_IDS" --out "$OUT/main_ids.txt" >&2
+  MAIN_IDS=(--scenario_ids_file "$OUT/main_ids.txt")
+fi
+want_for () {
+  if [ "$1" = main ] || [ "$1" = cdnod_fz ]; then
+    if [ "$MAIN_N" -gt 0 ]; then grep -c . "$OUT/main_ids.txt"; else echo $(( $(wc -l < "$(dataset_for "$2")/index.csv") - 1 )); fi
+  else grep -c . "$IDS"; fi
+}
 
 { echo "git: $(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
   echo "cells: $CELLS | ids: $IDS | fixed L: $FIXED_L | steps: $STEPS | workers: $WORKERS"; } | tee "$OUT/RUN_INFO.txt"
@@ -84,10 +97,10 @@ for step in $STEPS; do
       no_seg)     run "$c/$step" "$dir" "$want" "${common[@]}" --transform v2cap --no_segmentation --no_ablation --scenario_ids_file "$IDS" --batch_size 64 ;;
       pelt)       run "$c/$step" "$dir" "$want" "${common[@]}" --transform v2cap --detector pelt --fixed_min_regime_len "$FIXED_L" --no_ablation --scenario_ids_file "$IDS" --batch_size 64 ;;
       cdnod_fz)   run "$c/$step" "$dir" "$want" "$PYTHON" -u tools/run_cdnod.py --dataset_dir "$ds" --output_dir "$dir" \
-                    --test fisherz --n_sub 0 --c_index time --workers "$WORKERS" --resume ;;
+                    --test fisherz --n_sub 0 --c_index time ${MAIN_IDS[@]+"${MAIN_IDS[@]}"} --workers "$WORKERS" --resume ;;
       cdnod_kci)  run "$c/$step" "$dir" "$want" "$PYTHON" -u tools/run_cdnod.py --dataset_dir "$ds" --output_dir "$dir" \
                     --test kci --n_sub 500 --c_index time --scenario_ids_file "$IDS" --workers "$WORKERS" --resume ;;
-      main)       run "$c/$step" "$dir" "$want" "${common[@]}" --transform v2cap --fixed_min_regime_len "$FIXED_L" --ablation_methods "$LEARNERS" --batch_size 128 ;;
+      main)       run "$c/$step" "$dir" "$want" "${common[@]}" --transform v2cap --fixed_min_regime_len "$FIXED_L" --ablation_methods "$LEARNERS" ${MAIN_IDS[@]+"${MAIN_IDS[@]}"} --batch_size 128 ;;
       *) echo "unknown step '$step' (use oracle_seg oracle_L L1000 lite no_seg pelt cdnod_fz cdnod_kci main)" >&2; exit 1 ;;
     esac
   done

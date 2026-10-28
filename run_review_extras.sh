@@ -47,7 +47,7 @@ want_for () {
   case "$1" in
     dagma_sweep) grep -c . "$CAL_IDS" ;;
     pc)          grep -c . "$IDS" ;;
-    dagma_tuned) echo $(( $(wc -l < "$(dataset_for "$2")/index.csv") - 1 )) ;;
+    dagma_tuned) echo $(( $(wc -l < "$STD/$2/main/results.csv") - 1 )) ;;   # every scenario main ran
   esac
 }
 
