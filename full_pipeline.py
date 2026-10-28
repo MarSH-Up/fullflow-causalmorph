@@ -842,6 +842,7 @@ def extract_causal_structures(
     learner: str = "directlingam",
     seed: int = 0,
     transform: str = "v1",
+    standardize: bool = False,
 ) -> List[RegimeStructure]:
     """
     Iteratively extract causal structures from every detected regime window.
@@ -939,6 +940,8 @@ def extract_causal_structures(
             )
 
         window_df = pd.DataFrame(X[start:end], columns=variable_names)
+        if standardize:
+            window_df = _standardize_window(window_df)
 
         # ── Determine prior ──────────────────────────────────────────────────
         prior_source = "cold"
@@ -1128,7 +1131,18 @@ def extract_causal_structures(
 
 # ── Multi-algorithm ablation ─────────────────────────────────────────────────
 ABLATION_METHODS = ("directlingam", "icalingam")            # default per-window learners
-ABLATION_CHOICES = ("directlingam", "icalingam", "dagma")    # dagma: DagmaLinear, Bello et al. NeurIPS 2022
+ABLATION_CHOICES = ("directlingam", "icalingam", "dagma", "dagma_paper", "sortnregress", "randomregress", "empty")
+# dagma: DagmaLinear (Bello et al., NeurIPS 2022) with the window rescaling below;
+# dagma_paper: DagmaLinear on the centred raw window with the hyperparameters of the paper (Appendix C.1.1);
+# sortnregress: order by marginal variance, then regress (Reisach et al., NeurIPS 2021), a variance-leak reference;
+# randomregress: the same regression on a random order, the orientation floor;
+# empty: the empty graph, a reference for the scoring.
+
+
+def _standardize_window(window_df: pd.DataFrame) -> pd.DataFrame:
+    """Centre each column of the window and divide it by its standard deviation (constant columns left centred)."""
+    sd = window_df.std(ddof=0).replace(0.0, 1.0)
+    return (window_df - window_df.mean()) / sd
 
 
 def _fit_window_learner(method: str, window_df: pd.DataFrame, variable_names: List[str], seed: int):
@@ -1161,6 +1175,34 @@ def _fit_window_learner(method: str, window_df: pd.DataFrame, variable_names: Li
         G = nx.from_numpy_array((np.abs(W) > 0).astype(int), create_using=nx.DiGraph)
         order = list(nx.topological_sort(G)) if nx.is_directed_acyclic_graph(G) else list(range(len(variable_names)))
         return pd.DataFrame(W, columns=variable_names, index=variable_names), order
+    if method == "dagma_paper":
+        import contextlib, io
+        from dagma.linear import DagmaLinear
+        Xw = window_df.to_numpy(dtype=float)
+        Xw = Xw - Xw.mean(axis=0)
+        with contextlib.redirect_stderr(io.StringIO()):
+            W = DagmaLinear(loss_type="l2").fit(Xw, lambda1=0.05, w_threshold=0.3, T=4, mu_init=1.0, mu_factor=0.1,
+                                                s=[1.0, 0.9, 0.8, 0.7], warm_iter=20000, max_iter=70000, lr=3e-4)
+        G = nx.from_numpy_array((np.abs(W) > 0).astype(int), create_using=nx.DiGraph)
+        order = list(nx.topological_sort(G)) if nx.is_directed_acyclic_graph(G) else list(range(len(variable_names)))
+        return pd.DataFrame(W, columns=variable_names, index=variable_names), order
+    if method in ("sortnregress", "randomregress"):
+        # Reisach et al. (2021): increasing marginal variance (or a random permutation) as the
+        # causal order, then LassoLarsIC (BIC) of each node on its predecessors with adaptive weights.
+        from sklearn.linear_model import LinearRegression, LassoLarsIC
+        Xw = window_df.to_numpy(dtype=float)
+        Xw = Xw - Xw.mean(axis=0)
+        order = (list(np.argsort(Xw.var(axis=0))) if method == "sortnregress"
+                 else list(np.random.default_rng(seed).permutation(Xw.shape[1])))
+        W = np.zeros((Xw.shape[1], Xw.shape[1]))
+        for k in range(1, len(order)):
+            target, covs = order[k], order[:k]
+            w = np.abs(LinearRegression().fit(Xw[:, covs], Xw[:, target]).coef_)
+            W[covs, target] = LassoLarsIC(criterion="bic").fit(Xw[:, covs] * w, Xw[:, target]).coef_ * w
+        return pd.DataFrame(W, columns=variable_names, index=variable_names), [int(i) for i in order]
+    if method == "empty":
+        p = len(variable_names)
+        return pd.DataFrame(np.zeros((p, p)), columns=variable_names, index=variable_names), list(range(p))
     raise ValueError(f"unknown per-window learner {method!r}; choose from {ABLATION_CHOICES}")
 
 
@@ -1175,6 +1217,7 @@ def extract_causal_structures_ablation(
     prior_mode: str = "chain",
     seed: int = 0,
     methods: Tuple[str, ...] = ABLATION_METHODS,
+    standardize: bool = False,
 ) -> Dict[str, List[RegimeStructure]]:
     """
     Run the baseline structure learners on each detected window and return
@@ -1219,6 +1262,8 @@ def extract_causal_structures_ablation(
             print(f"\n  [Regime {regime_idx}]  window [{start} : {end}]  ({n_samples} samples)")
 
         window_df = pd.DataFrame(X[start:end], columns=variable_names)
+        if standardize:
+            window_df = _standardize_window(window_df)
 
         for method in methods:
             adj, order = _fit_window_learner(method, window_df, variable_names, seed + regime_idx)

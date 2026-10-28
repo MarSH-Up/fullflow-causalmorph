@@ -12,7 +12,8 @@ simulator shipped with the `dagma` package unchanged:
 The regimes are concatenated in time; nothing else is added (no observation
 noise, no rescaling). The only choices made here are the ones the
 stationary benchmark does not have: the number of regimes K and the regime
-length, set to the n = 1000 of the original benchmark.
+lengths, drawn uniformly in n*(1 -+ jitter) around the n = 1000 of the
+original benchmark (jitter 0 gives regimes of exactly n samples).
 
 Output layout is the one of generate_datasets.py (index.csv, -dat.csv,
 -am.csv), so run_experiments.py and tools/run_cdnod.py read it unchanged.
@@ -28,7 +29,7 @@ import numpy as np
 import pandas as pd
 from dagma import utils as du
 
-GRAPHS = {"ER2": ("ER", 2), "ER4": ("ER", 4), "SF4": ("SF", 4)}
+GRAPHS = {"ER2": ("ER", 2), "ER4": ("ER", 4), "SF2": ("SF", 2), "SF4": ("SF", 4)}
 SEMS = ("gauss", "exp", "gumbel")
 
 
@@ -36,14 +37,15 @@ def scenario_id(d, graph, sem, k, seed):
     return f"d{d}_{graph}_{sem}_r{k}_s{seed:03d}"
 
 
-def generate_one(d, graph, sem, k, n, seed, output_dir):
+def generate_one(d, graph, sem, k, n, jitter, seed, output_dir):
     gtype, per_node = GRAPHS[graph]
+    sizes = np.random.default_rng(seed ^ 0xA110C).integers(int(n * (1 - jitter)), int(n * (1 + jitter)) + 1, size=k)
     du.set_random_seed(seed)
     blocks, adjs = [], []
-    for _ in range(k):
+    for size in sizes:
         B = du.simulate_dag(d, per_node * d, gtype)
         W = du.simulate_parameter(B)
-        blocks.append(du.simulate_linear_sem(W, n, sem))
+        blocks.append(du.simulate_linear_sem(W, int(size), sem))
         adjs.append((W != 0).astype(float))
     X = np.vstack(blocks)
     names = [f"V{i + 1}" for i in range(d)]
@@ -70,10 +72,10 @@ def generate_one(d, graph, sem, k, n, seed, output_dir):
         "seed": seed,
         "total_samples": len(X),
         "n_true_cps": k - 1,
-        "change_points": ";".join(str(n * (r + 1)) for r in range(k - 1)),
-        "regime_sizes": ";".join([str(n)] * k),
+        "change_points": ";".join(str(c) for c in np.cumsum(sizes)[:-1]),
+        "regime_sizes": ";".join(str(int(x)) for x in sizes),
         "variable_names": ";".join(names),
-        "min_samples_regime": n,
+        "min_samples_regime": int(sizes.min()),
         "graph": graph,
         "sem_type": sem,
         "mean_edges": float(np.mean([A.sum() for A in adjs])),
@@ -89,6 +91,7 @@ def main():
     ap.add_argument("--sems", nargs="+", default=list(SEMS))
     ap.add_argument("--regimes", type=int, nargs="+", default=[2, 3, 4])
     ap.add_argument("--n", type=int, default=1000, help="samples per regime (n of the original benchmark)")
+    ap.add_argument("--jitter", type=float, default=0.4, help="regime length drawn in n*(1 -+ jitter); 0 = exactly n")
     ap.add_argument("--n_seeds", type=int, default=10, help="repetitions per setting (10 in the original)")
     args = ap.parse_args()
 
@@ -96,7 +99,7 @@ def main():
     rows = []
     grid = itertools.product(args.d, args.graphs, args.sems, args.regimes, range(args.n_seeds))
     for seed, (d, graph, sem, k, _) in enumerate(grid):  # one seed per scenario
-        rows.append(generate_one(d, graph, sem, k, args.n, seed, args.output_dir))
+        rows.append(generate_one(d, graph, sem, k, args.n, args.jitter, seed, args.output_dir))
     pd.DataFrame(rows).to_csv(os.path.join(args.output_dir, "index.csv"), index=False)
     print(f"{len(rows)} scenarios -> {args.output_dir}")
 

@@ -449,6 +449,7 @@ def run_loaded(
     learner: str = "directlingam",
     transform: str = "v1",
     ablation_methods: tuple = ABLATION_METHODS,
+    standardize_windows: bool = False,
 ) -> dict:
     """
     Run the pipeline on an already-loaded scenario. Returns a flat metrics dict.
@@ -532,7 +533,7 @@ def run_loaded(
                 chain_soft_lambda=chain_soft_lambda,
                 prior_density=(consensus_prior_density if consensus_prior_density is not None else 0.2),
                 learner=learner, seed=seed,
-                transform=transform,
+                transform=transform, standardize=standardize_windows,
             )
             for s_ in structures:
                 tr = assign_true_regime(s_.window_start, s_.window_end, true_cps, T)
@@ -545,7 +546,7 @@ def run_loaded(
                 ablation_results = extract_causal_structures_ablation(
                     X=X, detected_change_points=cps_ext, variable_names=variable_names,
                     window_overlap=window_overlap, verbose=False, seed=seed,
-                    methods=tuple(ablation_methods),
+                    methods=tuple(ablation_methods), standardize=standardize_windows,
                 )
                 for structs_m in ablation_results.values():
                     for s_ in structs_m:
@@ -591,6 +592,7 @@ def run_loaded(
             "learner":            learner,
             "prior_mode":         prior_mode,
             "transform":          transform,
+            "standardize_windows": int(standardize_windows),
             "n_transform_failed": int(sum(1 for s in structures if getattr(s, "transform_failed", False))),
         })
         for k in CONFIRM_MIN_DIFF:
@@ -1013,7 +1015,10 @@ if __name__ == "__main__":
                      help="Skip the DirectLiNGAM / ICA-LiNGAM per-window baselines")
     exp.add_argument("--ablation_methods",     type=str, default=",".join(ABLATION_METHODS),
                      help="comma-separated per-window learners on the detected windows "
-                          "(directlingam, icalingam, dagma); default directlingam,icalingam")
+                          "(directlingam, icalingam, dagma, dagma_paper, sortnregress, empty); default directlingam,icalingam")
+    exp.add_argument("--standardize_windows",  action="store_true",
+                     help="centre and scale each column of every window to unit variance before any learner "
+                          "(removes the variance ordering, Reisach et al. 2021); the detector is unaffected")
     exp.add_argument("--learner",              type=str, default="directlingam", choices=["directlingam", "icalingam"],
                      help="structure learner fitted after CausalMorph (and used for the cold prior)")
     exp.add_argument("--transform",            type=str, default="v1", choices=["v1", "v2", "lite", "v2cap", "litecap", "none"],
@@ -1051,4 +1056,5 @@ if __name__ == "__main__":
         learner=args.learner,
         transform=args.transform,
         ablation_methods=tuple(m.strip() for m in args.ablation_methods.split(",") if m.strip()),
+        standardize_windows=args.standardize_windows,
     )
