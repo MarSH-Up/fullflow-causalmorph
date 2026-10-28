@@ -80,8 +80,21 @@ def detection(target):
     return out
 
 
+REF = "pipeline Direct (std)"
+VERSUS = ["DAGMA paper cfg (std)", "DAGMA rescaled (std)", "DirectLiNGAM (std)", "pipeline ICA (std)",
+          "randomregress (std)", "empty graph (raw)", "CD-NOD Fisher-z"]
+
+
+def paired(a, b, n_boot=2000, seed=0):
+    v = (a - b).dropna().to_numpy(float)
+    rng = np.random.default_rng(seed)
+    boot = v[rng.integers(0, len(v), (n_boot, len(v)))].mean(axis=1)
+    lo, hi = np.percentile(boot, [2.5, 97.5])
+    return f"{v.mean():+.3f} [{lo:+.3f}, {hi:+.3f}] {int((v < 0).sum())}/{int((v > 0).sum())}"
+
+
 def main():
-    rows = []
+    rows, prows = [], []
     for t in TARGETS:
         cols = columns(t)
         if not cols:
@@ -89,16 +102,26 @@ def main():
         ids = sorted(set.intersection(*[set(s.dropna().index) for s in cols.values()]))
         rows.append({"target": t, "n": len(ids), **{k: round(float(v.loc[ids].mean()), 3) for k, v in cols.items()},
                      **{f"F1 {k}": v for k, v in detection(t).items()}})
+        groups = {t: ids}
         if t == "external":
             sem = pd.read_csv(os.path.join(ROOT, open(os.path.join(OUT, "RUN_INFO.txt")).read().split("external: ")[1].split(" |")[0],
                                            "index.csv")).set_index("scenario_id").sem_type.reindex(ids)
             for s in sorted(sem.unique()):
                 k = sem.index[sem == s]
+                groups[f"external/{s}"] = list(k)
                 rows.append({"target": f"external/{s}", "n": len(k), **{c: round(float(v.loc[k].mean()), 3) for c, v in cols.items()}})
+        if REF in cols:
+            for g, k in groups.items():
+                prows.append({"target": g, **{f"{REF} - {o}": paired(cols[REF].loc[k], cols[o].loc[k]) for o in VERSUS if o in cols}})
     T = pd.DataFrame(rows).set_index("target").T
     T.to_csv(os.path.join(OUT, "summary.csv"))
     pd.set_option("display.width", 250); pd.set_option("display.max_rows", 100)
     print(T.to_string())
+    if prows:
+        P = pd.DataFrame(prows).set_index("target").T
+        P.to_csv(os.path.join(OUT, "paired.csv"))
+        print("\npaired differences in nSHD (mean [95% bootstrap CI] scenarios lower/higher):")
+        print(P.to_string())
 
 
 if __name__ == "__main__":
