@@ -30,6 +30,7 @@ CELLS="${CELLS:-lin_laplace nonlin_laplace lin_normal nonlin_normal}"
 STEPS="${STEPS:-dagma_sweep pc}"
 DATA_PREFIX="${DATA_PREFIX:-datasets_full_}"
 FIXED_L="${FIXED_L:-500}"
+PERMUTE="${PERMUTE:-1}"
 CAL_IDS="${CAL_IDS:-results/hardening_validation/sample_ids.txt}"
 IDS="$REF/kci_ids.txt"
 LAMBDAS="${LAMBDAS:-0.005 0.01 0.02 0.05 0.1}"
@@ -41,6 +42,7 @@ dataset_for () { if [ "$1" = "lin_laplace" ]; then echo datasets; else echo "${D
 BASE=(--detector v1O --corr_gamma 2.5 --corr_gamma_rank 1.5 --no-hybrid --chain_prior_threshold 0.05
       --bootstrap_n 0 --window_overlap 0.0 --prior_mode cold --learner directlingam --standardize_windows
       --transform v2cap --fixed_min_regime_len "$FIXED_L")
+[ "$PERMUTE" = 1 ] && BASE+=(--permute_variables)
 SWEEP=""; for l in $LAMBDAS; do for t in $THRESHOLDS; do SWEEP="$SWEEP,dagma_l${l}_t${t}"; done; done; SWEEP="${SWEEP#,}"
 
 want_for () {

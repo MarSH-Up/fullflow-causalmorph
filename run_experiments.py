@@ -79,7 +79,7 @@ from evaluation.metrics import (
 
 # ── Load one scenario ─────────────────────────────────────────────────────────
 
-def load_scenario(scenario_id: str, dataset_dir: str, index_row: pd.Series):
+def load_scenario(scenario_id: str, dataset_dir: str, index_row: pd.Series, permute_variables: bool = False):
     """
     Load a scenario from its CSV pair.
 
@@ -107,6 +107,15 @@ def load_scenario(scenario_id: str, dataset_dir: str, index_row: pd.Series):
         block.index   = variable_names
         block.columns = variable_names
         true_adjs.append(block.astype(float))
+
+    if permute_variables:
+        # the generator writes every graph in index order (V1 -> V2 -> ...); a fixed random
+        # permutation per scenario removes that order from the column positions
+        import zlib
+        perm = np.random.default_rng(zlib.crc32(scenario_id.encode())).permutation(len(variable_names))
+        variable_names = [variable_names[i] for i in perm]
+        X = X[:, perm]
+        true_adjs = [a.loc[variable_names, variable_names] for a in true_adjs]
 
     return X, variable_names, true_cps, true_adjs, regime_sizes, min_samples
 
@@ -644,7 +653,7 @@ def _read_cps(path: str) -> dict:
             for r in d.itertuples()}
 
 
-def run_one(scenario_id: str, index_row: pd.Series, dataset_dir: str, **cfg) -> dict:
+def run_one(scenario_id: str, index_row: pd.Series, dataset_dir: str, permute_variables: bool = False, **cfg) -> dict:
     """Load one scenario from disk and run it (see run_loaded for the options)."""
     meta = dict(
         scenario_id=scenario_id,
@@ -658,7 +667,7 @@ def run_one(scenario_id: str, index_row: pd.Series, dataset_dir: str, **cfg) -> 
     )
     try:
         X, variable_names, true_cps, true_adjs, regime_sizes, min_samples = load_scenario(
-            scenario_id, dataset_dir, index_row
+            scenario_id, dataset_dir, index_row, permute_variables=permute_variables
         )
     except Exception:
         return {**meta, "status": "error", "error_msg": traceback.format_exc(limit=3).strip()}
@@ -1038,6 +1047,9 @@ if __name__ == "__main__":
     exp.add_argument("--cps_from",             type=str, default=None,
                      help="results.csv of an earlier run: reuse its detected_cps instead of running the detector "
                           "(only scenarios present there are run); for extra learners on the same windows")
+    exp.add_argument("--permute_variables",    action="store_true",
+                     help="permute the variables of every scenario at load (fixed per scenario): the "
+                          "generator writes the true causal order as the column order")
     exp.add_argument("--prior_shuffle",        action="store_true",
                      help="control: the preconditioning receives the tentative skeleton oriented along a random order")
     exp.add_argument("--standardize_windows",  action="store_true",
@@ -1083,4 +1095,5 @@ if __name__ == "__main__":
         standardize_windows=args.standardize_windows,
         cps_from=_read_cps(args.cps_from) if args.cps_from else None,
         prior_shuffle=args.prior_shuffle,
+        permute_variables=args.permute_variables,
     )

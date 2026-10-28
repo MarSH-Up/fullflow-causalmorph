@@ -32,6 +32,7 @@ OUT="${OUT:-results/robustness}"
 N_GRID="${N_GRID:-150}"            # held-out grid scenarios per cell
 DAGMA_SEEDS="${DAGMA_SEEDS:-10}"   # repetitions per setting of the external benchmark
 FIXED_L="${FIXED_L:-500}"
+PERMUTE="${PERMUTE:-1}"   # 1: permute the variables of every scenario (the grid generator writes the causal order as the column order)
 CELLS="${CELLS:-lin_laplace nonlin_laplace lin_normal nonlin_normal}"
 DATA_PREFIX="${DATA_PREFIX:-datasets_full_}"   # existing full cells; missing ones are generated for the sampled ids
 DAGMA_DATA="${DAGMA_DATA:-datasets_dagma_v2}"
@@ -43,6 +44,7 @@ export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM
 PIPE=(--detector v1O --corr_gamma 2.5 --corr_gamma_rank 1.5 --no-hybrid --chain_prior_threshold 0.05
       --bootstrap_n 0 --window_overlap 0.0 --transform v2cap --prior_mode cold
       --fixed_min_regime_len "$FIXED_L")
+[ "$PERMUTE" = 1 ] && PIPE+=(--permute_variables)
 RAW_LEARNERS="icalingam,directlingam,dagma,dagma_paper,sortnregress,randomregress,empty"
 STD_LEARNERS="icalingam,directlingam,dagma,dagma_paper,sortnregress,randomregress"
 
@@ -120,7 +122,7 @@ for step in $STEPS; do
                --learner directlingam --standardize_windows --detector pelt --no_ablation --workers "$WORKERS" --batch_size 32 --resume ;;
       cdnod_fz) [ "$t" = "external" ] || continue   # the grid cells: run_standardised.sh
              run "$t/$step" "$dir" "$PYTHON" -u tools/run_cdnod.py --dataset_dir "$ds" --output_dir "$dir" \
-               --test fisherz --n_sub 0 --c_index time --workers "$WORKERS" --resume ;;
+               --test fisherz --n_sub 0 --c_index time $([ "$PERMUTE" = 1 ] && echo --permute_variables) --workers "$WORKERS" --resume ;;
       *) echo "unknown step '$step' (use raw std raw_dl std_dl no_seg pelt cdnod_fz)" >&2; exit 1 ;;
     esac
   done

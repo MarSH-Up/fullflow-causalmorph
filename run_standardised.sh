@@ -42,6 +42,8 @@ CELLS="${CELLS:-lin_laplace nonlin_laplace lin_normal nonlin_normal}"
 STEPS="${STEPS:-oracle_seg oracle_L L1000 lite no_seg pelt cdnod_fz cdnod_kci main}"
 DATA_PREFIX="${DATA_PREFIX:-datasets_full_}"
 FIXED_L="${FIXED_L:-500}"
+PERMUTE="${PERMUTE:-1}"   # 1: permute the variables of every scenario (the generator writes the causal order as the column order)
+PERM=(); [ "$PERMUTE" = 1 ] && PERM=(--permute_variables)
 MAIN_N="${MAIN_N:-0}"   # 0: every scenario in main and cdnod_fz; N: a stratified held-out sample of N per cell
 EXCLUDE_IDS="${EXCLUDE_IDS:-results/hardening_validation/sample_ids.txt}"
 IDS="$REF/kci_ids.txt"
@@ -88,7 +90,7 @@ run () {   # name dir want command...
 for step in $STEPS; do
   for c in $CELLS; do
     ds="$(dataset_for "$c")"; dir="$OUT/$c/$step"; want="$(want_for "$step" "$c")"
-    common=("$PYTHON" -u run_experiments.py --dataset_dir "$ds" --output_dir "$dir" "${BASE[@]}" --workers "$WORKERS" --resume)
+    common=("$PYTHON" -u run_experiments.py --dataset_dir "$ds" --output_dir "$dir" "${BASE[@]}" ${PERM[@]+"${PERM[@]}"} --workers "$WORKERS" --resume)
     case "$step" in
       oracle_seg) run "$c/$step" "$dir" "$want" "${common[@]}" --transform v2cap --oracle_segmentation --no_ablation --scenario_ids_file "$IDS" --batch_size 64 ;;
       oracle_L)   run "$c/$step" "$dir" "$want" "${common[@]}" --transform v2cap --no_ablation --scenario_ids_file "$IDS" --batch_size 64 ;;
@@ -97,9 +99,9 @@ for step in $STEPS; do
       no_seg)     run "$c/$step" "$dir" "$want" "${common[@]}" --transform v2cap --no_segmentation --no_ablation --scenario_ids_file "$IDS" --batch_size 64 ;;
       pelt)       run "$c/$step" "$dir" "$want" "${common[@]}" --transform v2cap --detector pelt --fixed_min_regime_len "$FIXED_L" --no_ablation --scenario_ids_file "$IDS" --batch_size 64 ;;
       cdnod_fz)   run "$c/$step" "$dir" "$want" "$PYTHON" -u tools/run_cdnod.py --dataset_dir "$ds" --output_dir "$dir" \
-                    --test fisherz --n_sub 0 --c_index time ${MAIN_IDS[@]+"${MAIN_IDS[@]}"} --workers "$WORKERS" --resume ;;
+                    --test fisherz --n_sub 0 --c_index time ${MAIN_IDS[@]+"${MAIN_IDS[@]}"} ${PERM[@]+"${PERM[@]}"} --workers "$WORKERS" --resume ;;
       cdnod_kci)  run "$c/$step" "$dir" "$want" "$PYTHON" -u tools/run_cdnod.py --dataset_dir "$ds" --output_dir "$dir" \
-                    --test kci --n_sub 500 --c_index time --scenario_ids_file "$IDS" --workers "$WORKERS" --resume ;;
+                    --test kci --n_sub 500 --c_index time --scenario_ids_file "$IDS" ${PERM[@]+"${PERM[@]}"} --workers "$WORKERS" --resume ;;
       main)       run "$c/$step" "$dir" "$want" "${common[@]}" --transform v2cap --fixed_min_regime_len "$FIXED_L" --ablation_methods "$LEARNERS" ${MAIN_IDS[@]+"${MAIN_IDS[@]}"} --batch_size 128 ;;
       *) echo "unknown step '$step' (use oracle_seg oracle_L L1000 lite no_seg pelt cdnod_fz cdnod_kci main)" >&2; exit 1 ;;
     esac

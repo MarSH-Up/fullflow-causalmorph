@@ -47,14 +47,14 @@ def run_scenario(X, names, true_cps, true_adjs, meta, test="kci", alpha=0.05, n_
     return row
 
 
-def _job(sid, index_row, dataset_dir, cfg, cps_detected):
+def _job(sid, index_row, dataset_dir, cfg, cps_detected, permute_variables=False):
     import warnings as _w
     _w.filterwarnings("ignore")
     from run_experiments import load_scenario
     meta = dict(scenario_id=sid, p=int(index_row["p"]), n_regimes=int(index_row["n_regimes"]),
                 samples_regime=int(index_row.get("samples_regime") or 0))
     try:
-        X, names, true_cps, true_adjs, _, _ = load_scenario(sid, dataset_dir, index_row)
+        X, names, true_cps, true_adjs, _, _ = load_scenario(sid, dataset_dir, index_row, permute_variables=permute_variables)
     except Exception:  # noqa: BLE001
         return {**meta, "status": "error", "error_msg": traceback.format_exc(limit=3).strip()}
     return run_scenario(X, names, true_cps, true_adjs, meta, change_points=cps_detected, **cfg)
@@ -73,6 +73,8 @@ def main():
     ap.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) // 2))
     ap.add_argument("--batch_size", type=int, default=24)
     ap.add_argument("--resume", action="store_true")
+    ap.add_argument("--permute_variables", action="store_true",
+                    help="permute the variables of every scenario at load (see run_experiments.load_scenario)")
     a = ap.parse_args()
     n_sub = a.n_sub or None
     cfg = dict(test=a.test, alpha=a.alpha, n_sub=n_sub, c_index=a.c_index)
@@ -124,7 +126,7 @@ def main():
     # (KCI time varies by an order of magnitude with p); results are appended every batch_size.
     buf = []
     with ProcessPoolExecutor(max_workers=a.workers) as ex:
-        futs = [ex.submit(_job, r.scenario_id, r, a.dataset_dir, cfg, detected.get(r.scenario_id)) for _, r in rows]
+        futs = [ex.submit(_job, r.scenario_id, r, a.dataset_dir, cfg, detected.get(r.scenario_id), a.permute_variables) for _, r in rows]
         for f in as_completed(futs):
             buf.append(f.result()); done += 1
             if len(buf) >= a.batch_size:

@@ -25,6 +25,7 @@ IDS="${IDS:-results/full_20261012_1845/kci_ids.txt}"
 CELLS="${CELLS:-lin_laplace nonlin_laplace lin_normal nonlin_normal}"
 DATA_PREFIX="${DATA_PREFIX:-datasets_full_}"
 FIXED_L="${FIXED_L:-500}"
+PERMUTE="${PERMUTE:-1}"
 CONFIGS="${CONFIGS:-directlingam_v2 directlingam_lite directlingam_none directlingam_shuffle icalingam_v2 icalingam_lite icalingam_none icalingam_shuffle}"
 LOG="$OUT/logs"; mkdir -p "$LOG"
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 NUMEXPR_NUM_THREADS=1 PYTHONHASHSEED=0
@@ -33,6 +34,7 @@ dataset_for () { if [ "$1" = "lin_laplace" ]; then echo datasets; else echo "${D
 BASE=(--detector v1O --corr_gamma 2.5 --corr_gamma_rank 1.5 --no-hybrid --chain_prior_threshold 0.05
       --bootstrap_n 0 --window_overlap 0.0 --prior_mode cold --standardize_windows
       --fixed_min_regime_len "$FIXED_L" --no_ablation --scenario_ids_file "$IDS")
+[ "$PERMUTE" = 1 ] && BASE+=(--permute_variables)
 WANT=$(grep -c . "$IDS")
 
 { echo "git: $(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
