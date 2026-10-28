@@ -58,6 +58,7 @@ def _init_worker(here_path: str):
 
 from full_pipeline import (
     detect_change_points,
+    pelt_change_points,
     extract_causal_structures,
     extract_causal_structures_ablation,
     compute_shd,
@@ -504,6 +505,8 @@ def run_loaded(
                 det_result, cps_det = None, []
             elif oracle_segmentation:
                 det_result, cps_det = None, list(true_cps)
+            elif detector_version == "pelt":
+                det_result, cps_det = None, pelt_change_points(X, min_size=min_regime_len)
             else:
                 det_result = detect_change_points(
                     X, baseline_end=baseline_end, min_regime_len=min_regime_len,
@@ -954,7 +957,7 @@ if __name__ == "__main__":
                         help="Progress-reporting group size (default: 100)")
     parser.add_argument("--workers",        type=int,   default=None,
                         help="Parallel worker processes (default: cpu_count // 2)")
-    parser.add_argument("--detector",       type=str,   default="v1G", choices=["v1F", "v1G", "v1H", "v1I", "v1J", "v1K", "v1L", "v1M", "v1N", "v1O"],
+    parser.add_argument("--detector",       type=str,   default="v1G", choices=["v1F", "v1G", "v1H", "v1I", "v1J", "v1K", "v1L", "v1M", "v1N", "v1O", "pelt"],
                         help="Detector version (default: v1G). "
                              "v1H = strict correlation-based detector, ~92%% precision vs v1G's ~52%%. "
                              "v1I = wavelet-coherence-based detector (Grinsted et al. 2004); "

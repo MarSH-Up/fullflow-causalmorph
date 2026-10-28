@@ -43,9 +43,15 @@ def columns(target):
         d = load(target, arm)
         if d is not None:
             cols[f"pipeline Direct ({tag})"] = d.mean_norm_shd
-    d = load(target, "cdnod")
+    for arm, name in (("no_seg", "no segmentation (std)"), ("pelt", "PELT detector (std)")):
+        d = load(target, arm)
+        if d is not None:
+            cols[name] = d.mean_norm_shd
+    d = load(target, "cdnod_fz")
     if d is not None:
         cols["CD-NOD Fisher-z"] = d.mean_norm_shd
+        if "union_norm_shd" in d:
+            cols["CD-NOD vs union graph"] = d.union_norm_shd
     return cols
 
 
@@ -81,7 +87,7 @@ def detection(target):
 
 
 REF = "pipeline Direct (std)"
-VERSUS = ["DAGMA paper cfg (std)", "DAGMA rescaled (std)", "DirectLiNGAM (std)", "pipeline ICA (std)",
+VERSUS = ["no segmentation (std)", "PELT detector (std)", "DAGMA paper cfg (std)", "DAGMA rescaled (std)", "DirectLiNGAM (std)", "pipeline ICA (std)",
           "randomregress (std)", "empty graph (raw)", "CD-NOD Fisher-z"]
 
 

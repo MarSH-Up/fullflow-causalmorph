@@ -13,7 +13,10 @@
 #                   configuration of its paper on the raw window (dagma_paper)
 #   learner         the pipeline with ICA-LiNGAM (raw, std) and with DirectLiNGAM
 #                   (raw_dl, std_dl), whose causal-order search does not use scale
-#   CD-NOD          Fisher-z, C = time, on the external benchmark
+#   segmentation    on the external benchmark, the method (DirectLiNGAM, standardised)
+#                   without segmentation (no_seg) and with PELT as the detector (pelt)
+#   CD-NOD          Fisher-z, C = time, on the external benchmark, scored per regime
+#                   and against the union of the regime graphs
 #
 # Output: $OUT/<data>/<arm>/results.csv (each step resumes).
 #
@@ -32,7 +35,7 @@ FIXED_L="${FIXED_L:-500}"
 CELLS="${CELLS:-lin_laplace nonlin_laplace lin_normal nonlin_normal}"
 DATA_PREFIX="${DATA_PREFIX:-datasets_full_}"   # existing full cells; missing ones are generated for the sampled ids
 DAGMA_DATA="${DAGMA_DATA:-datasets_dagma_v2}"
-STEPS="${STEPS:-raw std raw_dl std_dl cdnod}"
+STEPS="${STEPS:-raw std raw_dl std_dl no_seg pelt cdnod_fz}"
 EXCLUDE_IDS="${EXCLUDE_IDS:-results/hardening_validation/sample_ids.txt}"   # calibration sample
 LOG="$OUT/logs"; mkdir -p "$LOG"
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 NUMEXPR_NUM_THREADS=1 PYTHONHASHSEED=0
@@ -79,7 +82,7 @@ done
 targets="$CELLS external"
 : > "$OUT/PLAN.tsv"
 for step in $STEPS; do for t in $targets; do
-  [ "$step" = cdnod ] && [ "$t" != external ] && continue
+  case "$step" in no_seg|pelt|cdnod_fz) [ "$t" != external ] && continue ;; esac
   if [ "$t" = external ]; then n=$(( $(wc -l < "$DAGMA_DATA/index.csv") - 1 )); else n=$(grep -c . "$IDS"); fi
   printf '%s\t%s\t%s\n' "$step" "$t" "$n" >> "$OUT/PLAN.tsv"
 done; done
@@ -109,10 +112,16 @@ for step in $STEPS; do
                --learner directlingam --no_ablation ${ids[@]+"${ids[@]}"} --workers "$WORKERS" --batch_size 32 --resume ;;
       std_dl) run "$t/$step" "$dir" "$PYTHON" -u run_experiments.py --dataset_dir "$ds" --output_dir "$dir" "${PIPE[@]}" \
                --learner directlingam --standardize_windows --no_ablation ${ids[@]+"${ids[@]}"} --workers "$WORKERS" --batch_size 32 --resume ;;
-      cdnod) [ "$t" = "external" ] || continue   # the grid cells already have CD-NOD in the reference run
+      no_seg) [ "$t" = "external" ] || continue   # the grid cells: run_standardised.sh
+             run "$t/$step" "$dir" "$PYTHON" -u run_experiments.py --dataset_dir "$ds" --output_dir "$dir" "${PIPE[@]}" \
+               --learner directlingam --standardize_windows --no_segmentation --no_ablation --workers "$WORKERS" --batch_size 32 --resume ;;
+      pelt) [ "$t" = "external" ] || continue
+             run "$t/$step" "$dir" "$PYTHON" -u run_experiments.py --dataset_dir "$ds" --output_dir "$dir" "${PIPE[@]}" \
+               --learner directlingam --standardize_windows --detector pelt --no_ablation --workers "$WORKERS" --batch_size 32 --resume ;;
+      cdnod_fz) [ "$t" = "external" ] || continue   # the grid cells: run_standardised.sh
              run "$t/$step" "$dir" "$PYTHON" -u tools/run_cdnod.py --dataset_dir "$ds" --output_dir "$dir" \
                --test fisherz --n_sub 0 --c_index time --workers "$WORKERS" --resume ;;
-      *) echo "unknown step '$step' (use raw std raw_dl std_dl cdnod)" >&2; exit 1 ;;
+      *) echo "unknown step '$step' (use raw std raw_dl std_dl no_seg pelt cdnod_fz)" >&2; exit 1 ;;
     esac
   done
 done

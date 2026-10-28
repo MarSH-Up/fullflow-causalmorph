@@ -11,12 +11,19 @@
 #     oracle_L    detector sized from the true shortest regime (old headline)
 #     L1000       detector sized from L = 1000
 #     lite        Stage II of the preconditioning removed (litecap)
+#     no_seg      one window over the whole series (ignore the non-stationarity)
+#     pelt        PELT with a Gaussian mean-and-covariance cost (ruptures) as the
+#                 detector, same bound, same extraction: is the detector needed?
+#     cdnod_kci   CD-NOD with KCI on a 500-row subsample, scored per regime and
+#                 against the union of the regime graphs
 #   on every scenario of the four cells (the analysis drops the calibration sample):
+#     cdnod_fz    CD-NOD with Fisher-z and C = time, scored per regime and against
+#                 the union of the regime graphs (its own target)
 #     main        the method, plus DirectLiNGAM, ICA-LiNGAM, DAGMA (configuration
 #                 of its paper), sortnregress, random-order regression and the
 #                 empty graph on the same standardised windows
-# CD-NOD is not re-run: its tests (Fisher-z, KCI with median-heuristic widths)
-# do not depend on the scale of the series, so the reference run's rows hold.
+# CD-NOD runs on the raw series: its tests (Fisher-z, KCI with median-heuristic
+# widths) do not depend on the scale of the variables.
 #
 # Output: $OUT/<cell>/<step>/results.csv (each step resumes).
 #
@@ -31,7 +38,7 @@ WORKERS="${WORKERS:-40}"
 REF="${REF:-results/full_20261012_1845}"
 OUT="${OUT:-results/standardised}"
 CELLS="${CELLS:-lin_laplace nonlin_laplace lin_normal nonlin_normal}"
-STEPS="${STEPS:-oracle_seg oracle_L L1000 lite main}"
+STEPS="${STEPS:-oracle_seg oracle_L L1000 lite no_seg pelt cdnod_fz cdnod_kci main}"
 DATA_PREFIX="${DATA_PREFIX:-datasets_full_}"
 FIXED_L="${FIXED_L:-500}"
 IDS="$REF/kci_ids.txt"
@@ -45,7 +52,7 @@ BASE=(--detector v1O --corr_gamma 2.5 --corr_gamma_rank 1.5 --no-hybrid --chain_
       --bootstrap_n 0 --window_overlap 0.0 --prior_mode cold --learner directlingam --standardize_windows)
 LEARNERS="directlingam,icalingam,dagma_paper,sortnregress,randomregress,empty"
 
-want_for () { if [ "$1" = main ]; then echo $(( $(wc -l < "$(dataset_for "$2")/index.csv") - 1 )); else grep -c . "$IDS"; fi; }
+want_for () { if [ "$1" = main ] || [ "$1" = cdnod_fz ]; then echo $(( $(wc -l < "$(dataset_for "$2")/index.csv") - 1 )); else grep -c . "$IDS"; fi; }
 
 { echo "git: $(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
   echo "cells: $CELLS | ids: $IDS | fixed L: $FIXED_L | steps: $STEPS | workers: $WORKERS"; } | tee "$OUT/RUN_INFO.txt"
@@ -74,8 +81,14 @@ for step in $STEPS; do
       oracle_L)   run "$c/$step" "$dir" "$want" "${common[@]}" --transform v2cap --no_ablation --scenario_ids_file "$IDS" --batch_size 64 ;;
       L1000)      run "$c/$step" "$dir" "$want" "${common[@]}" --transform v2cap --fixed_min_regime_len 1000 --no_ablation --scenario_ids_file "$IDS" --batch_size 64 ;;
       lite)       run "$c/$step" "$dir" "$want" "${common[@]}" --transform litecap --fixed_min_regime_len "$FIXED_L" --no_ablation --scenario_ids_file "$IDS" --batch_size 64 ;;
+      no_seg)     run "$c/$step" "$dir" "$want" "${common[@]}" --transform v2cap --no_segmentation --no_ablation --scenario_ids_file "$IDS" --batch_size 64 ;;
+      pelt)       run "$c/$step" "$dir" "$want" "${common[@]}" --transform v2cap --detector pelt --fixed_min_regime_len "$FIXED_L" --no_ablation --scenario_ids_file "$IDS" --batch_size 64 ;;
+      cdnod_fz)   run "$c/$step" "$dir" "$want" "$PYTHON" -u tools/run_cdnod.py --dataset_dir "$ds" --output_dir "$dir" \
+                    --test fisherz --n_sub 0 --c_index time --workers "$WORKERS" --resume ;;
+      cdnod_kci)  run "$c/$step" "$dir" "$want" "$PYTHON" -u tools/run_cdnod.py --dataset_dir "$ds" --output_dir "$dir" \
+                    --test kci --n_sub 500 --c_index time --scenario_ids_file "$IDS" --workers "$WORKERS" --resume ;;
       main)       run "$c/$step" "$dir" "$want" "${common[@]}" --transform v2cap --fixed_min_regime_len "$FIXED_L" --ablation_methods "$LEARNERS" --batch_size 128 ;;
-      *) echo "unknown step '$step' (use oracle_seg oracle_L L1000 lite main)" >&2; exit 1 ;;
+      *) echo "unknown step '$step' (use oracle_seg oracle_L L1000 lite no_seg pelt cdnod_fz cdnod_kci main)" >&2; exit 1 ;;
     esac
   done
 done

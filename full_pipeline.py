@@ -514,6 +514,23 @@ def build_nonstationary_scenario(
 
 # ── Step 2: Change-point detection ───────────────────────────────────────────
 # Mirrors run_realistic_scenario detector config
+def pelt_change_points(X: np.ndarray, min_size: int) -> List[int]:
+    """
+    Reference detector: PELT (Killick et al., 2012) with the Gaussian cost of ruptures
+    (Truong et al., 2020), which models a change in the mean and in the covariance of the
+    whole vector, with a BIC penalty (p + p(p+1)/2 parameters per segment) and segments of
+    at least min_size samples (the same bound the non-stationarity detector receives).
+    """
+    import warnings
+    import ruptures as rpt
+    T, p = X.shape
+    pen = (p + p * (p + 1) / 2) * np.log(T)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        bk = rpt.Pelt(model="normal", min_size=int(min_size), jump=10).fit(X).predict(pen=pen)
+    return [int(b) for b in bk[:-1]]
+
+
 def detect_change_points(
     X: np.ndarray,
     baseline_end: int,

@@ -9,7 +9,8 @@ one graph: the union of the regime graphs, with some edges left unoriented.
 That single graph is scored against every true regime exactly as a pipeline
 structure would be (compute_shd per regime, windowed nSHD, transition F1),
 plus the orientation-free skeleton F1 so unoriented edges are not penalised
-twice.
+twice, and against its own target, the union of the regime graphs (directed
+and skeleton). The estimated edges are kept (cdnod_edges, "from>to").
 
 Conventions:
   causal-learn  graph[j, i] == 1 and graph[i, j] == -1  ->  i -> j
@@ -119,6 +120,10 @@ def evaluate_single_graph(A, true_adjs: List[pd.DataFrame], true_cps: Sequence[i
     s = RegimeStructure(regime_idx=0, window_start=0, window_end=T, n_samples=T,
                         causal_order=list(range(p)), adjacency_matrix=A_df, used_prior=False)
     last = compute_shd(A_df, pd.DataFrame((np.asarray(true_adjs[-1]) != 0).astype(float), index=names, columns=names))
+    # CD-NOD's own target: the union of the regime graphs (every edge present in some regime)
+    U = pd.DataFrame((np.sum([np.asarray(t) != 0 for t in true_adjs], axis=0) > 0).astype(float), index=names, columns=names)
+    union = compute_shd(A_df, U)
+    edges = [f"{i}>{j}" for i in range(p) for j in range(p) if A_df.values[i, j] != 0]
     return {
         "mean_norm_shd": float(np.mean([r["normalized_shd"] for r in per])),
         "mean_struct_f1": float(np.mean([r["F1"] for r in per])),
@@ -128,4 +133,7 @@ def evaluate_single_graph(A, true_adjs: List[pd.DataFrame], true_cps: Sequence[i
         "windowed_nshd_weighted": float(windowed_nshd_weighted([s], true_adjs, list(true_cps), T, p)),
         "transition_f1": float(transition_f1([s], true_adjs, list(true_cps), T, p)),
         "consensus_f1": last["F1"], "consensus_norm_shd": last["normalized_shd"],
+        "union_norm_shd": union["normalized_shd"], "union_f1": union["F1"],
+        "union_skeleton_f1": skeleton_prf(A_df, U)["F1"],
+        "cdnod_edges": ";".join(edges),
     }

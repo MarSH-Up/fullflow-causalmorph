@@ -25,3 +25,6 @@ statsmodels==0.14.4
 causal-learn==0.1.4.0
 # DAGMA per-window baseline (--ablation_methods ...,dagma)
 dagma==1.1.1
+
+# PELT reference detector (--detector pelt)
+ruptures==1.1.9

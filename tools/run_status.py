@@ -15,6 +15,31 @@ import re
 
 from full_status import count_rows, fmt_h
 
+# preliminary result shown for every step with rows: mean nSHD of the step's own output
+# and of the baselines it carries on the same windows (rows finished so far)
+PRELIM = [("mean_norm_shd", "nSHD"), ("directlingam_mean_norm_shd", "DL"), ("icalingam_mean_norm_shd", "ICA"),
+          ("dagma_paper_mean_norm_shd", "DAGMA"), ("sortnregress_mean_norm_shd", "sortnr"),
+          ("randomregress_mean_norm_shd", "rand"), ("empty_mean_norm_shd", "empty"), ("union_norm_shd", "vs union")]
+
+
+def prelim(path):
+    """'nSHD .071 | DAGMA .271 | ... | F1 .87' from the rows finished so far; '' when there are none."""
+    import pandas as pd
+    try:
+        d = pd.read_csv(path)
+    except (OSError, ValueError):
+        return ""
+    d = d[d.status == "ok"] if "status" in d else d
+    if d.empty:
+        return ""
+    parts = [f"{lab} {d[c].mean():.3f}" for c, lab in PRELIM if c in d and d[c].notna().any()]
+    if {"chow0001_tp", "chow0001_fp", "chow0001_fn"} <= set(d.columns) and d.chow0001_tp.notna().any():
+        tp, fp, fn = d.chow0001_tp.sum(), d.chow0001_fp.sum(), d.chow0001_fn.sum()
+        if tp + fp and tp + fn:
+            P, R = tp / (tp + fp), tp / (tp + fn)
+            parts.append(f"conf F1 {2 * P * R / (P + R):.2f}")
+    return " | ".join(parts)
+
 
 def step_starts(log_path):
     """{(data, step): start datetime} from the runner's '== data/step  YYYY-MM-DD HH:MM ==' lines."""
@@ -42,6 +67,7 @@ def main():
     head = f"{'#':>2}  {'step':<14}{'data':<16}{'done':>15}{'%':>7}{'errors':>8}{'rate/h':>9}{'left':>10}  status"
     print(f"\n{a.out}   {now:%Y-%m-%d %H:%M}\n\n{head}\n{'-' * len(head)}")
     done_rows = total_rows = 0
+    results = []
     for k, (step, t, want) in enumerate(plan, 1):
         want = int(want)
         n, err = count_rows(os.path.join(a.out, t, step, "results.csv"))
@@ -55,11 +81,18 @@ def main():
         done_rows += min(n, want); total_rows += want
         print(f"{k:>2}  {step:<14}{t:<16}{n:>7} / {want:<6}{100 * n / max(want, 1):>6.1f}%{err:>8}"
               f"{(f'{rate:,.0f}' if rate else '-'):>9}{fmt_h(left):>10}  {status}")
+        if n:
+            results.append((k, step, t, status, prelim(os.path.join(a.out, t, step, "results.csv"))))
 
     first = min(starts.values()) if starts else None
     eta = (now - first).total_seconds() / 3600 * (total_rows - done_rows) / done_rows if first and done_rows else None
     print(f"\noverall: {done_rows} / {total_rows} rows ({100 * done_rows / max(total_rows, 1):.1f}%)"
           f"   time left at the overall rate: {fmt_h(eta) if eta else '-'}   (steps differ in cost: rough)\n")
+    if results:
+        print("preliminary results (mean nSHD over the rows finished so far; lower is better)")
+        for k, step, t, status, line in results:
+            print(f"{k:>2}  {step:<14}{t:<16}{'' if status == 'done' else '(partial) '}{line}")
+        print()
 
 
 if __name__ == "__main__":
