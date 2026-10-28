@@ -19,6 +19,7 @@ Flow:
 
 import os
 import sys
+import re
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -1148,12 +1149,20 @@ def extract_causal_structures(
 
 # ── Multi-algorithm ablation ─────────────────────────────────────────────────
 ABLATION_METHODS = ("directlingam", "icalingam")            # default per-window learners
-ABLATION_CHOICES = ("directlingam", "icalingam", "dagma", "dagma_paper", "sortnregress", "randomregress", "empty")
+ABLATION_CHOICES = ("directlingam", "icalingam", "dagma", "dagma_paper", "sortnregress", "randomregress", "empty", "pc")
 # dagma: DagmaLinear (Bello et al., NeurIPS 2022) with the window rescaling below;
 # dagma_paper: DagmaLinear on the centred raw window with the hyperparameters of the paper (Appendix C.1.1);
 # sortnregress: order by marginal variance, then regress (Reisach et al., NeurIPS 2021), a variance-leak reference;
 # randomregress: the same regression on a random order, the orientation floor;
-# empty: the empty graph, a reference for the scoring.
+# empty: the empty graph, a reference for the scoring;
+# pc: PC with Fisher-z (causal-learn), a CPDAG learner; unoriented edges are set in both directions;
+# dagma_l<lambda1>_t<threshold>: DAGMA with the paper's schedule and the given l1 weight and
+#   weight threshold, for the calibration sweep (e.g. dagma_l0.02_t0.2).
+_DAGMA_SWEEP = re.compile(r"dagma_l([0-9.]+)_t([0-9.]+)")
+
+
+def _known_learner(method: str) -> bool:
+    return method in ABLATION_CHOICES or _DAGMA_SWEEP.fullmatch(method) is not None
 
 
 def _standardize_window(window_df: pd.DataFrame) -> pd.DataFrame:
@@ -1192,13 +1201,15 @@ def _fit_window_learner(method: str, window_df: pd.DataFrame, variable_names: Li
         G = nx.from_numpy_array((np.abs(W) > 0).astype(int), create_using=nx.DiGraph)
         order = list(nx.topological_sort(G)) if nx.is_directed_acyclic_graph(G) else list(range(len(variable_names)))
         return pd.DataFrame(W, columns=variable_names, index=variable_names), order
-    if method == "dagma_paper":
+    sweep = _DAGMA_SWEEP.fullmatch(method)
+    if method == "dagma_paper" or sweep:
         import contextlib, io
         from dagma.linear import DagmaLinear
+        lam, thr = (float(sweep.group(1)), float(sweep.group(2))) if sweep else (0.05, 0.3)
         Xw = window_df.to_numpy(dtype=float)
         Xw = Xw - Xw.mean(axis=0)
         with contextlib.redirect_stderr(io.StringIO()):
-            W = DagmaLinear(loss_type="l2").fit(Xw, lambda1=0.05, w_threshold=0.3, T=4, mu_init=1.0, mu_factor=0.1,
+            W = DagmaLinear(loss_type="l2").fit(Xw, lambda1=lam, w_threshold=thr, T=4, mu_init=1.0, mu_factor=0.1,
                                                 s=[1.0, 0.9, 0.8, 0.7], warm_iter=20000, max_iter=70000, lr=3e-4)
         G = nx.from_numpy_array((np.abs(W) > 0).astype(int), create_using=nx.DiGraph)
         order = list(nx.topological_sort(G)) if nx.is_directed_acyclic_graph(G) else list(range(len(variable_names)))
@@ -1217,6 +1228,16 @@ def _fit_window_learner(method: str, window_df: pd.DataFrame, variable_names: Li
             w = np.abs(LinearRegression().fit(Xw[:, covs], Xw[:, target]).coef_)
             W[covs, target] = LassoLarsIC(criterion="bic").fit(Xw[:, covs] * w, Xw[:, target]).coef_ * w
         return pd.DataFrame(W, columns=variable_names, index=variable_names), [int(i) for i in order]
+    if method == "pc":
+        import contextlib, io
+        from causallearn.search.ConstraintBased.PC import pc
+        from cdnod_baseline import cdnod_to_adjacency
+        Xw = window_df.to_numpy(dtype=float)
+        p = Xw.shape[1]
+        with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+            cg = pc(Xw, alpha=0.05, indep_test="fisherz", show_progress=False)
+        A, _ = cdnod_to_adjacency(cg.G.graph, p)
+        return pd.DataFrame(A.astype(float), columns=variable_names, index=variable_names), list(range(p))
     if method == "empty":
         p = len(variable_names)
         return pd.DataFrame(np.zeros((p, p)), columns=variable_names, index=variable_names), list(range(p))
@@ -1268,7 +1289,7 @@ def extract_causal_structures_ablation(
         new_start = max(raw_windows[i][0] - overlap, prev_start)
         windows.append((new_start, raw_windows[i][1]))
 
-    bad = [m for m in methods if m not in ABLATION_CHOICES]
+    bad = [m for m in methods if not _known_learner(m)]
     if bad:
         raise ValueError(f"unknown per-window learner(s) {bad}; choose from {ABLATION_CHOICES}")
     results: Dict[str, List[RegimeStructure]] = {m: [] for m in methods}

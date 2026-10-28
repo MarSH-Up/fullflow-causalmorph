@@ -451,6 +451,7 @@ def run_loaded(
     transform: str = "v1",
     ablation_methods: tuple = ABLATION_METHODS,
     standardize_windows: bool = False,
+    cps_from: Optional[dict] = None,
 ) -> dict:
     """
     Run the pipeline on an already-loaded scenario. Returns a flat metrics dict.
@@ -505,6 +506,8 @@ def run_loaded(
                 det_result, cps_det = None, []
             elif oracle_segmentation:
                 det_result, cps_det = None, list(true_cps)
+            elif cps_from is not None:
+                det_result, cps_det = None, list(cps_from.get(meta["scenario_id"], []))
             elif detector_version == "pelt":
                 det_result, cps_det = None, pelt_change_points(X, min_size=min_regime_len)
             else:
@@ -629,6 +632,14 @@ def run_loaded(
         }
 
     return row
+
+
+def _read_cps(path: str) -> dict:
+    """{scenario_id: detected change points} from an earlier results.csv (rows with status ok)."""
+    d = pd.read_csv(path, dtype=str)
+    d = d[d.status == "ok"].drop_duplicates("scenario_id")
+    return {r.scenario_id: [int(x) for x in str(r.detected_cps).split(";") if x.strip() and x != "nan"]
+            for r in d.itertuples()}
 
 
 def run_one(scenario_id: str, index_row: pd.Series, dataset_dir: str, **cfg) -> dict:
@@ -791,6 +802,9 @@ def run_experiments(
         keep = {ln.strip() for ln in open(scenario_ids_file) if ln.strip()}
         index_df = index_df[index_df["scenario_id"].isin(keep)]
         print(f"  scenario_ids_file: {len(index_df)} of {len(keep)} listed scenarios found")
+    if run_cfg.get("cps_from") is not None:
+        index_df = index_df[index_df["scenario_id"].isin(set(run_cfg["cps_from"]))]
+        print(f"  cps_from: {len(index_df)} scenarios with reused change points")
 
     os.makedirs(output_dir, exist_ok=True)
 
@@ -1019,6 +1033,9 @@ if __name__ == "__main__":
     exp.add_argument("--ablation_methods",     type=str, default=",".join(ABLATION_METHODS),
                      help="comma-separated per-window learners on the detected windows "
                           "(directlingam, icalingam, dagma, dagma_paper, sortnregress, empty); default directlingam,icalingam")
+    exp.add_argument("--cps_from",             type=str, default=None,
+                     help="results.csv of an earlier run: reuse its detected_cps instead of running the detector "
+                          "(only scenarios present there are run); for extra learners on the same windows")
     exp.add_argument("--standardize_windows",  action="store_true",
                      help="centre and scale each column of every window to unit variance before any learner "
                           "(removes the variance ordering, Reisach et al. 2021); the detector is unaffected")
@@ -1060,4 +1077,5 @@ if __name__ == "__main__":
         transform=args.transform,
         ablation_methods=tuple(m.strip() for m in args.ablation_methods.split(",") if m.strip()),
         standardize_windows=args.standardize_windows,
+        cps_from=_read_cps(args.cps_from) if args.cps_from else None,
     )

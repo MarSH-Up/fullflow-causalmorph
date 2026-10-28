@@ -19,7 +19,8 @@ from full_status import count_rows, fmt_h
 # and of the baselines it carries on the same windows (rows finished so far)
 PRELIM = [("mean_norm_shd", "nSHD"), ("directlingam_mean_norm_shd", "DL"), ("icalingam_mean_norm_shd", "ICA"),
           ("dagma_paper_mean_norm_shd", "DAGMA"), ("sortnregress_mean_norm_shd", "sortnr"),
-          ("randomregress_mean_norm_shd", "rand"), ("empty_mean_norm_shd", "empty"), ("union_norm_shd", "vs union")]
+          ("randomregress_mean_norm_shd", "rand"), ("empty_mean_norm_shd", "empty"), ("pc_mean_norm_shd", "PC"),
+          ("union_norm_shd", "vs union"), ("pc_mean_skeleton_f1", "PC skel F1"), ("mean_skeleton_f1", "skel F1")]
 
 
 def prelim(path):
@@ -33,6 +34,13 @@ def prelim(path):
     if d.empty:
         return ""
     parts = [f"{lab} {d[c].mean():.3f}" for c, lab in PRELIM if c in d and d[c].notna().any()]
+    sweep = {c[:-len("_mean_norm_shd")]: d[c].mean() for c in d.columns
+             if c.startswith("dagma_l") and c.endswith("_mean_norm_shd")}
+    if len(sweep) == 1:
+        parts.append(f"DAGMA tuned {next(iter(sweep.values())):.3f}")
+    elif sweep:
+        best = min(sweep, key=sweep.get)
+        parts.append(f"DAGMA best of {len(sweep)} {sweep[best]:.3f} ({best})")
     if {"chow0001_tp", "chow0001_fp", "chow0001_fn"} <= set(d.columns) and d.chow0001_tp.notna().any():
         tp, fp, fn = d.chow0001_tp.sum(), d.chow0001_fp.sum(), d.chow0001_fn.sum()
         if tp + fp and tp + fn:

@@ -68,13 +68,15 @@ def match(tc, dc, tol=TOL):
     return tp, len(dc) - tp, len(tc) - tp
 
 
-def detection(target):
-    d = load(target, "raw")
-    if d is None:
+def detection(target, d=None):
+    d = load(target, "raw") if d is None else d
+    if d is None or d.empty:
         return {}
     out = {}
+    L = int(d.min_regime_len_used.iloc[0]) if "min_regime_len_used" in d else 500
     for name, get in (("detector (raw)", lambda r: parse(r.detected_cps)),
-                      ("uniform, true count", lambda r: [int(round(r.total_samples * k / r.n_regimes)) for k in range(1, int(r.n_regimes))])):
+                      ("uniform, true count", lambda r: [int(round(r.total_samples * k / r.n_regimes)) for k in range(1, int(r.n_regimes))]),
+                      (f"one cut every L={L}", lambda r: list(range(L, int(r.total_samples), L)))):
         TP = FP = FN = 0
         for _, r in d.iterrows():
             a, b, c = match(parse(r.true_cps), get(r)); TP += a; FP += b; FN += c
@@ -123,6 +125,17 @@ def main():
     T.to_csv(os.path.join(OUT, "summary.csv"))
     pd.set_option("display.width", 250); pd.set_option("display.max_rows", 100)
     print(T.to_string())
+    # detection by nominal regime length: equispaced cuts are easy when regimes are short
+    srows = []
+    for t in TARGETS[:-1]:
+        d = load(t, "raw")
+        if d is None:
+            continue
+        for n, g in d.groupby("samples_regime"):
+            srows.append({"target": t, "samples_regime": int(n), "n": len(g), **detection(t, g)})
+    if srows:
+        print("\ndetection F1 by nominal regime length (grid cells):")
+        print(pd.DataFrame(srows).set_index(["target", "samples_regime"]).to_string())
     if prows:
         P = pd.DataFrame(prows).set_index("target").T
         P.to_csv(os.path.join(OUT, "paired.csv"))
