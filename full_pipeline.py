@@ -861,6 +861,7 @@ def extract_causal_structures(
     seed: int = 0,
     transform: str = "v1",
     standardize: bool = False,
+    prior_shuffle: bool = False,
 ) -> List[RegimeStructure]:
     """
     Iteratively extract causal structures from every detected regime window.
@@ -982,6 +983,16 @@ def extract_causal_structures(
                     columns=variable_names,
                     index=variable_names,
                 )
+                if prior_shuffle:
+                    # control: keep the tentative skeleton, orient it along a random order, so the
+                    # preconditioning receives no orientation information from the tentative fit
+                    perm = list(np.random.default_rng(wseed).permutation(len(variable_names)))
+                    rank = {v: k for k, v in enumerate(perm)}
+                    skel = ((adj_prior.values + adj_prior.values.T) > 0).astype(float)
+                    shuffled = np.array([[skel[i, j] if rank[i] < rank[j] else 0.0 for j in range(len(perm))]
+                                         for i in range(len(perm))])
+                    causal_order_prior = perm
+                    adj_prior = pd.DataFrame(shuffled, columns=variable_names, index=variable_names)
                 # Cold result becomes the anchor for subsequent windows.
                 anchor_order = causal_order_prior
                 anchor_adj = adj_prior

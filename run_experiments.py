@@ -452,6 +452,7 @@ def run_loaded(
     ablation_methods: tuple = ABLATION_METHODS,
     standardize_windows: bool = False,
     cps_from: Optional[dict] = None,
+    prior_shuffle: bool = False,
 ) -> dict:
     """
     Run the pipeline on an already-loaded scenario. Returns a flat metrics dict.
@@ -539,7 +540,7 @@ def run_loaded(
                 chain_soft_lambda=chain_soft_lambda,
                 prior_density=(consensus_prior_density if consensus_prior_density is not None else 0.2),
                 learner=learner, seed=seed,
-                transform=transform, standardize=standardize_windows,
+                transform=transform, standardize=standardize_windows, prior_shuffle=prior_shuffle,
             )
             for s_ in structures:
                 tr = assign_true_regime(s_.window_start, s_.window_end, true_cps, T)
@@ -599,6 +600,7 @@ def run_loaded(
             "prior_mode":         prior_mode,
             "transform":          transform,
             "standardize_windows": int(standardize_windows),
+            "prior_shuffle":      int(prior_shuffle),
             "n_transform_failed": int(sum(1 for s in structures if getattr(s, "transform_failed", False))),
         })
         for k in CONFIRM_MIN_DIFF:
@@ -1036,6 +1038,8 @@ if __name__ == "__main__":
     exp.add_argument("--cps_from",             type=str, default=None,
                      help="results.csv of an earlier run: reuse its detected_cps instead of running the detector "
                           "(only scenarios present there are run); for extra learners on the same windows")
+    exp.add_argument("--prior_shuffle",        action="store_true",
+                     help="control: the preconditioning receives the tentative skeleton oriented along a random order")
     exp.add_argument("--standardize_windows",  action="store_true",
                      help="centre and scale each column of every window to unit variance before any learner "
                           "(removes the variance ordering, Reisach et al. 2021); the detector is unaffected")
@@ -1078,4 +1082,5 @@ if __name__ == "__main__":
         ablation_methods=tuple(m.strip() for m in args.ablation_methods.split(",") if m.strip()),
         standardize_windows=args.standardize_windows,
         cps_from=_read_cps(args.cps_from) if args.cps_from else None,
+        prior_shuffle=args.prior_shuffle,
     )
