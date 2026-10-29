@@ -65,6 +65,7 @@ from full_pipeline import (
     assign_true_regime,
     aggregate_structures_bayesian,
     ABLATION_METHODS,
+    bic_filter_cps,
 )
 from evaluation.metrics import (
     evaluate_detection,
@@ -468,6 +469,7 @@ def run_loaded(
     stage0_output: str = "learner",
     stage0_regressor: str = "mlp",
     curvature_threshold: float = 0.05,
+    cut_filter: str = "none",
 ) -> dict:
     """
     Run the pipeline on an already-loaded scenario. Returns a flat metrics dict.
@@ -536,6 +538,9 @@ def run_loaded(
             if legacy_postprocessing:
                 onset_set = set(det_result.onset_points) if det_result is not None else set(cps_det)
                 cps_det = legacy_prune(cps_det, onset_set, T, p, min_samples)
+            n_cps_raw = len(cps_det)
+            if det_result is not None and cut_filter != "none":
+                cps_det = bic_filter_cps(X, cps_det, cut_filter)   # segment-level validation of the detector's cuts
             eval_result = evaluate_detection(true_cps, cps_det, tolerance=det_tolerance)
 
             # ── Extraction windows (merge, never delete) ─────────────────────
@@ -624,6 +629,8 @@ def run_loaded(
             "mean_gate_share":    float(np.nanmean([getattr(s, "gate_share", np.nan) for s in structures])) if structures else np.nan,
             "mean_curvature":     float(np.nanmean([getattr(s, "curvature", np.nan) for s in structures])) if structures else np.nan,
             "n_pc_windows":       int(sum(1 for s in structures if getattr(s, "route", "") == "pc")),
+            "cut_filter":         cut_filter,
+            "n_cps_raw":          n_cps_raw,
             "n_transform_failed": int(sum(1 for s in structures if getattr(s, "transform_failed", False))),
         })
         for k in CONFIRM_MIN_DIFF:
@@ -1079,6 +1086,9 @@ if __name__ == "__main__":
                      help="CausalMorph Stage 0 (PC skeleton + nonparametric sink orientation) as the prior: in every window, "
                           "only when the Stage II gate calls at least --stage0_threshold of the tentative residuals Gaussian, "
                           "or auto: curved windows (--curvature_threshold) to Stage 0, linear Gaussian windows to PC's CPDAG, the rest to LiNGAM")
+    exp.add_argument("--cut_filter", type=str, default="none", choices=["none", "bic", "rank"],
+                     help="segment-level validation of the detector's cuts: backward elimination under PELT's Gaussian "
+                          "cost and BIC penalty (bic), or the same on the Gaussian scores of the joint ranks (rank)")
     exp.add_argument("--curvature_threshold", type=float, default=0.05,
                      help="auto: mean R² gain of Stage I's polynomial over a linear fit from which a window counts as curved")
     exp.add_argument("--stage0_threshold", type=float, default=0.5)
@@ -1122,6 +1132,6 @@ if __name__ == "__main__":
         cps_from=_read_cps(args.cps_from) if args.cps_from else None,
         prior_shuffle=args.prior_shuffle,
         stage0=args.stage0, stage0_threshold=args.stage0_threshold, stage0_output=args.stage0_output, stage0_regressor=args.stage0_regressor,
-        curvature_threshold=args.curvature_threshold,
+        curvature_threshold=args.curvature_threshold, cut_filter=args.cut_filter,
         permute_variables=args.permute_variables,
     )

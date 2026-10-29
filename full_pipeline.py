@@ -537,6 +537,55 @@ def build_nonstationary_scenario(
 
 # ── Step 2: Change-point detection ───────────────────────────────────────────
 # Mirrors run_realistic_scenario detector config
+CUT_FILTERS = ("none", "bic", "rank")
+
+
+def _logdet_cost(S: np.ndarray) -> float:
+    C = np.cov(S, rowvar=False) + 1e-6 * np.eye(S.shape[1])
+    return len(S) * np.linalg.slogdet(C)[1]
+
+
+def bic_filter_cps(X: np.ndarray, cps: List[int], mode: str = "bic") -> List[int]:
+    """
+    Segment-level validation of a detector's change points: backward elimination
+    under the Gaussian mean-and-covariance cost PELT uses, with its BIC penalty
+    (p + p(p+1)/2) log T per cut. At each pass every cut is scored by the gain of
+    splitting the two segments it separates (bounded by its neighbouring cuts);
+    the cut with the smallest gain is removed while that gain is not positive.
+    mode "rank": the cost is evaluated on the Gaussian scores of the joint ranks
+    of the two segments, so heavy-tailed draws cannot pay for a cut on their own.
+    """
+    if mode == "none" or not cps:
+        return list(cps)
+    if mode not in CUT_FILTERS:
+        raise ValueError(f"cut_filter must be one of {CUT_FILTERS}, got {mode!r}")
+    from scipy.stats import norm, rankdata
+    T, p = X.shape
+    pen = (p + p * (p + 1) / 2) * np.log(T)
+    cps = sorted(int(c) for c in cps)
+
+    def gain(a, c, b):
+        A, B = X[a:c], X[c:b]
+        if len(A) <= p + 2 or len(B) <= p + 2:
+            return -np.inf
+        if mode == "rank":
+            Z = norm.ppf(rankdata(np.vstack([A, B]), axis=0) / (b - a + 1.0))
+            A, B = Z[:len(A)], Z[len(A):]
+            AB = Z
+        else:
+            AB = X[a:b]
+        return _logdet_cost(AB) - _logdet_cost(A) - _logdet_cost(B) - pen
+
+    while cps:
+        bounds = [0] + cps + [T]
+        gains = [gain(bounds[k], bounds[k + 1], bounds[k + 2]) for k in range(len(cps))]
+        k = int(np.argmin(gains))
+        if gains[k] > 0:
+            break
+        cps.pop(k)
+    return cps
+
+
 def pelt_change_points(X: np.ndarray, min_size: int) -> List[int]:
     """
     Reference detector: PELT (Killick et al., 2012) with the Gaussian cost of ruptures
