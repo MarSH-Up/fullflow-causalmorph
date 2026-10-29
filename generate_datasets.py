@@ -434,7 +434,7 @@ if __name__ == "__main__":
     v2.add_argument("--mechanism",     type=str,   default="linear", choices=["linear", "nonlinear"])
     v2.add_argument("--nonlinearity",  type=float, default=0.7, help="weight of the nonlinear term (nonlinear only)")
     v2.add_argument("--nonlin_func",   type=str,   default="tanh",
-                    choices=["sigmoid", "tanh", "cube", "softplus", "elu", "leaky_relu"])
+                    choices=["sigmoid", "tanh", "cube", "softplus", "elu", "leaky_relu", "cube_unit", "tanh_unit"])
     v2.add_argument("--noise_dist",    type=str,   default="laplace", choices=["laplace", "normal", "uniform"])
     v2.add_argument("--only_ids",      type=str,   default=None,
                     help="file with scenario_ids (one per line); generate only those")

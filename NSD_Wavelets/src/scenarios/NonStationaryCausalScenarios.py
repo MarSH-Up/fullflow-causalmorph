@@ -26,7 +26,7 @@ class NonStationaryCausalScenario:
         self,
         p: int,
         mode: Literal["linear", "nonlinear"] = "linear",
-        nonlin_func: Literal["sigmoid", "tanh", "cube", "softplus", "elu", "leaky_relu"] = "tanh",
+        nonlin_func: Literal["sigmoid", "tanh", "cube", "softplus", "elu", "leaky_relu", "cube_unit", "tanh_unit"] = "tanh",
         nonlinearity: float = 0.0,
         seed: Optional[int] = None,
     ):
@@ -72,6 +72,11 @@ class NonStationaryCausalScenario:
             "softplus": lambda x: np.log1p(np.exp(np.clip(x, -50, 50))),  # Smooth approximation of ReLU
             "elu": lambda x: np.where(x > 0, x, 0.1 * (np.exp(x) - 1)),  # α=0.1
             "leaky_relu": lambda x: np.where(x > 0, x, 0.1 * x),  # α=0.1
+            # *_unit: the same function applied on the unit-variance scale of the parent effect and
+            # scaled back, so the curvature is active whatever the signal amplitude (at the small
+            # amplitudes the regimes use, cube and tanh of the raw effect are numerically linear)
+            "cube_unit": lambda x: (x / (np.std(x) or 1.0)) ** 3 * (np.std(x) or 1.0),
+            "tanh_unit": lambda x: np.tanh(x / (np.std(x) or 1.0)) * (np.std(x) or 1.0),
         }
 
         if self.nonlin_func not in f_dict:
