@@ -23,6 +23,21 @@ def _window_corr(Xw: np.ndarray, rank: bool) -> np.ndarray:
     return np.nan_to_num(np.corrcoef(Xw.T), nan=0.0)
 
 
+def _window_xi(Xw: np.ndarray) -> np.ndarray:
+    """Chatterjee's (2021) xi_n for every ordered pair of a window: xi[i, j] measures how much
+    column j is a function of column i (asymmetric, in [-1/2, 1], 0 under independence).
+    xi = 1 - 3 * sum_k |r_{k+1} - r_k| / (n^2 - 1), r the ranks of j ordered by i."""
+    n, N = Xw.shape
+    R = rankdata(Xw, axis=0)
+    order = np.argsort(Xw, axis=0, kind="stable")
+    xi = np.zeros((N, N))
+    for i in range(N):
+        r = R[order[:, i]]                                 # [n, N]: every column's ranks, ordered by column i
+        xi[i] = 1.0 - 3.0 * np.abs(np.diff(r, axis=0)).sum(axis=0) / (n ** 2 - 1.0)
+    np.fill_diagonal(xi, 0.0)
+    return xi
+
+
 def standardized_corr_change(
     X: np.ndarray,
     window: int,
@@ -30,6 +45,7 @@ def standardized_corr_change(
     scale_mask: np.ndarray = None,
     return_scale: bool = False,
     rank: bool = False,
+    stat: str = None,
 ):
     """
     Per-pair change in correlation between the windows before and after t,
@@ -61,17 +77,30 @@ def standardized_corr_change(
         track any monotone dependence, not only the linear part, and are not
         moved by single heavy-tailed draws. The Fisher variance is ~1.06/(W-3)
         instead of 1/(W-3), which the studentised scale absorbs.
+    stat : "pearson" | "spearman" | "xi" (overrides rank). "xi" uses
+        Chatterjee's xi_n over the N(N-1) ordered pairs, which tracks any
+        functional dependence, monotone or not; the change is scaled by
+        sqrt(5W/2), the inverse null sd of xi_n under independence, and the
+        studentised scale absorbs the rest. Its power against monotone
+        dependence is below Spearman's (Shi, Drton & Han, 2022).
     """
+    stat = stat or ("spearman" if rank else "pearson")
     T, N = X.shape
-    triu = np.triu_indices(N, k=1)
-    out = np.full((T, len(triu[0])), np.nan)
+    if stat == "xi":
+        pairs = np.where(~np.eye(N, dtype=bool))
+    else:
+        pairs = np.triu_indices(N, k=1)
+    out = np.full((T, len(pairs[0])), np.nan)
     if N < 2 or T < 3 * window:
         return out
-    scale = np.sqrt(max(window - 3, 1) / 2.0)
     clip = 1.0 - 1e-6
     for t in range(window, T - window):
-        c_past = _window_corr(X[t - window:t], rank)[triu]
-        c_fut = _window_corr(X[t:t + window], rank)[triu]
+        if stat == "xi":
+            out[t] = np.sqrt(2.5 * window) * (_window_xi(X[t:t + window])[pairs] - _window_xi(X[t - window:t])[pairs])
+            continue
+        scale = np.sqrt(max(window - 3, 1) / 2.0)
+        c_past = _window_corr(X[t - window:t], stat == "spearman")[pairs]
+        c_fut = _window_corr(X[t:t + window], stat == "spearman")[pairs]
         out[t] = scale * (np.arctanh(np.clip(c_fut, -clip, clip))
                           - np.arctanh(np.clip(c_past, -clip, clip)))
     s_hat = np.ones(out.shape[1])
@@ -103,6 +132,7 @@ def detect_correlation_changes(
     studentize: bool = False,
     refine_scale: bool = False,
     rank: bool = False,
+    stat: str = None,
 ):
     """
     Detect change points from shifts in pairwise channel correlations.
@@ -132,6 +162,9 @@ def detect_correlation_changes(
                    changes when regimes are short.
     rank : for "max", Spearman instead of Pearson correlations (see
            standardized_corr_change); ignored for "frobenius"
+    stat : for "max", "pearson" | "spearman" | "xi" (overrides rank; see
+           standardized_corr_change). With "xi" the threshold counts the
+           N(N-1) ordered pairs.
     adaptive_null : re-estimate the frobenius threshold from the segment since
                     the last accepted change point (with a guard band of one
                     window on each side) instead of from regime 0 only.
@@ -148,11 +181,11 @@ def detect_correlation_changes(
         return [], np.zeros(T), 0.0
 
     if statistic == "max":
-        m = N * (N - 1) // 2
+        m = N * (N - 1) if stat == "xi" else N * (N - 1) // 2
         threshold = float(np.sqrt(2.0 * np.log(m)) + gamma)
 
         def _detect(mask):
-            zeta = standardized_corr_change(X, window, studentize=studentize, scale_mask=mask, rank=rank)
+            zeta = standardized_corr_change(X, window, studentize=studentize, scale_mask=mask, rank=rank, stat=stat)
             sig = np.nan_to_num(np.nanmax(np.abs(zeta), axis=1), nan=0.0)
             pk, _ = find_peaks(sig, height=threshold, distance=refractory_period)
             return [int(p) for p in pk if edge_margin <= p < T - edge_margin], sig

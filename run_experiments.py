@@ -452,6 +452,7 @@ def run_loaded(
     chain_soft_lambda: Optional[float] = None,
     corr_gamma: float = 2.0,
     corr_gamma_rank: float = 1.5,
+    corr_gamma_xi: float = None,
     adaptive_null: bool = False,
     det_tolerance: int = 200,
     run_ablation: bool = True,
@@ -529,7 +530,7 @@ def run_loaded(
                 det_result = detect_change_points(
                     X, baseline_end=baseline_end, min_regime_len=min_regime_len,
                     seed=seed, detector_version=detector_version,
-                    corr_gamma=corr_gamma, adaptive_null=adaptive_null, corr_gamma_rank=corr_gamma_rank,
+                    corr_gamma=corr_gamma, adaptive_null=adaptive_null, corr_gamma_rank=corr_gamma_rank, corr_gamma_xi=corr_gamma_xi,
                 )
                 cps_det = detection_cps(det_result)
             if legacy_postprocessing:
@@ -995,7 +996,7 @@ if __name__ == "__main__":
                         help="Progress-reporting group size (default: 100)")
     parser.add_argument("--workers",        type=int,   default=None,
                         help="Parallel worker processes (default: cpu_count // 2)")
-    parser.add_argument("--detector",       type=str,   default="v1G", choices=["v1F", "v1G", "v1H", "v1I", "v1J", "v1K", "v1L", "v1M", "v1N", "v1O", "pelt"],
+    parser.add_argument("--detector",       type=str,   default="v1G", choices=["v1F", "v1G", "v1H", "v1I", "v1J", "v1K", "v1L", "v1M", "v1N", "v1O", "v1P", "v1X", "pelt"],
                         help="Detector version (default: v1G). "
                              "v1H = strict correlation-based detector, ~92%% precision vs v1G's ~52%%. "
                              "v1I = wavelet-coherence-based detector (Grinsted et al. 2004); "
@@ -1047,6 +1048,7 @@ if __name__ == "__main__":
     exp.add_argument("--corr_gamma",           type=float, default=2.0,
                      help="v1J threshold margin: sqrt(2 ln m) + gamma")
     exp.add_argument("--corr_gamma_rank",      type=float, default=1.5,
+    exp.add_argument("--corr_gamma_xi", type=float, default=None, help="margin of the xi threshold (v1P, v1X); default corr_gamma_rank")
                      help="v1N, v1O: threshold margin of the Spearman detector (corr_gamma is the Pearson one)")
     exp.add_argument("--adaptive_null",        action="store_true",
                      help="v1H: re-estimate the threshold from the segment since the last accepted change point")
@@ -1108,7 +1110,7 @@ if __name__ == "__main__":
         consensus_threshold=args.consensus_threshold,
         consensus_prior_density=args.consensus_prior_density,
         chain_soft_lambda=args.chain_soft_lambda, corr_gamma=args.corr_gamma,
-        corr_gamma_rank=args.corr_gamma_rank,
+        corr_gamma_rank=args.corr_gamma_rank, corr_gamma_xi=args.corr_gamma_xi,
         adaptive_null=args.adaptive_null, det_tolerance=args.det_tolerance,
         run_ablation=not args.no_ablation,
         legacy_postprocessing=args.legacy_postprocessing,

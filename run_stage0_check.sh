@@ -27,7 +27,7 @@ CONFIGS="${CONFIGS:-v2cap v3 v3_gauss v3_gauss_s0 v3_always_s0 v3_auto v2_auto}"
 CURV="${CURV:-0.05}"; GATE="${GATE:-0.5}"
 LOG="$OUT/logs"; mkdir -p "$LOG"
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 NUMEXPR_NUM_THREADS=1 PYTHONHASHSEED=0
-BASE=(--detector v1O --corr_gamma 2.5 --corr_gamma_rank 1.5 --no-hybrid --chain_prior_threshold 0.05
+BASE=(--corr_gamma 2.5 --corr_gamma_rank 1.5 --no-hybrid --chain_prior_threshold 0.05
       --bootstrap_n 0 --window_overlap 0.0 --prior_mode cold --learner directlingam --standardize_windows
       --fixed_min_regime_len "$FIXED_L" --permute_variables --workers "$WORKERS" --batch_size 16 --resume)
 echo "git: $(git rev-parse --short HEAD) | cells: $* | configs: $CONFIGS" | tee "$OUT/RUN_INFO.txt"
@@ -45,17 +45,21 @@ for cell in "$@"; do
   for cfg in $CONFIGS; do
     dir="$OUT/$name/$cfg"
     case "$cfg" in
-      v2cap)        extra=(--transform v2cap --ablation_methods pc,empty,directlingam) ;;
-      v3)           extra=(--transform v3 --no_ablation) ;;
-      v3_gauss)     extra=(--transform v3 --stage0 gauss --no_ablation) ;;
-      v3_gauss_s0)  extra=(--transform v3 --stage0 gauss --stage0_output stage0 --no_ablation) ;;
-      v3_always_s0) extra=(--transform v3 --stage0 always --stage0_output stage0 --no_ablation) ;;
-      v3_auto)      extra=(--transform v3 --stage0 auto --stage0_output stage0 --curvature_threshold "$CURV" --stage0_threshold "$GATE" --no_ablation) ;;
-      v2_auto)      extra=(--transform v2cap --stage0 auto --stage0_output stage0 --curvature_threshold "$CURV" --stage0_threshold "$GATE" --no_ablation) ;;
-      baselines)    extra=(--transform v2cap --ablation_methods dagma_paper,icalingam) ;;
+      v2cap)        extra=(--detector v1O --transform v2cap --ablation_methods pc,empty,directlingam) ;;
+      v3)           extra=(--detector v1O --transform v3 --no_ablation) ;;
+      v3_gauss)     extra=(--detector v1O --transform v3 --stage0 gauss --no_ablation) ;;
+      v3_gauss_s0)  extra=(--detector v1O --transform v3 --stage0 gauss --stage0_output stage0 --no_ablation) ;;
+      v3_always_s0) extra=(--detector v1O --transform v3 --stage0 always --stage0_output stage0 --no_ablation) ;;
+      v3_auto)      extra=(--detector v1O --transform v3 --stage0 auto --stage0_output stage0 --curvature_threshold "$CURV" --stage0_threshold "$GATE" --no_ablation) ;;
+      v2_auto)      extra=(--detector v1O --transform v2cap --stage0 auto --stage0_output stage0 --curvature_threshold "$CURV" --stage0_threshold "$GATE" --no_ablation) ;;
+      baselines)    extra=(--detector v1O --transform v2cap --ablation_methods dagma_paper,icalingam) ;;
+      det_v1P)      extra=(--detector v1P --transform v2cap --stage0 auto --stage0_output stage0 --no_ablation) ;;
+      det_v1X)      extra=(--detector v1X --transform v2cap --stage0 auto --stage0_output stage0 --no_ablation) ;;
+      det_v1P_g*)   extra=(--detector v1P --corr_gamma_xi "${cfg#det_v1P_g}" --transform v2cap --stage0 auto --stage0_output stage0 --no_ablation) ;;
+      det_v1X_g*)   extra=(--detector v1X --corr_gamma_xi "${cfg#det_v1X_g}" --transform v2cap --stage0 auto --stage0_output stage0 --no_ablation) ;;
       *) echo "unknown config '$cfg'" >&2; exit 1 ;;
     esac
-    reuse=(); [ "$cfg" = v2cap ] || reuse=(--cps_from "$OUT/$name/v2cap/results.csv")
+    reuse=(); case "$cfg" in v2cap|det_*) ;; *) reuse=(--cps_from "$OUT/$name/v2cap/results.csv") ;; esac
     run "$name/$cfg" "$dir" "$PYTHON" -u run_experiments.py --dataset_dir "$ds" --output_dir "$dir" "${BASE[@]}" "${extra[@]}" ${reuse[@]+"${reuse[@]}"}
   done
 done
