@@ -138,7 +138,7 @@ def _causalmorph_seeded(X: pd.DataFrame, causal_order, adj_truth: pd.DataFrame, 
 
 TRANSFORMS = ("v1", "v2", "lite", "v2cap", "litecap", "v3", "none")
 STAGE0_MODES = ("off", "gauss", "always", "auto")
-STAGE0_OUTPUTS = ("learner", "stage0")
+STAGE0_OUTPUTS = ("learner", "stage0", "learner_pk")
 
 
 def _apply_transform(transform: str, X: pd.DataFrame, causal_order, adj_truth: pd.DataFrame, seed: int) -> pd.DataFrame:
@@ -1019,7 +1019,10 @@ def extract_causal_structures(
       is at least stage0_threshold ("gauss"; a window whose tentative graph has
       no non-root node is not routed). stage0_output: in a routed window the
       regime's graph is the learner's fit on the transformed window
-      ("learner") or Stage 0's DAG itself ("stage0").
+      ("learner"), Stage 0's DAG itself ("stage0"), or DirectLiNGAM's fit on
+      the transformed window constrained to Stage 0's causal order through
+      lingam's prior_knowledge ("learner_pk": the learner prunes and weighs
+      the edges, Stage 0 fixes the order).
       "auto" routes each window to the identifiability source it offers: a
       curved mechanism (mean R² gain of Stage I's polynomial over a linear fit
       at least curvature_threshold) goes to Stage 0 (ANM orientation); a linear
@@ -1189,7 +1192,18 @@ def extract_causal_structures(
                 transformed = window_df
             if verbose:
                 print("    Fitting DirectLiNGAM on transformed data (warm)...")
-            model_warm = _make_learner(learner, wseed)
+            if stage0_used and stage0_output == "learner_pk":
+                if learner != "directlingam":
+                    raise ValueError("stage0_output='learner_pk' needs learner='directlingam'")
+                pos = {v: k for k, v in enumerate(causal_order_prior)}
+                pk = -np.ones((len(variable_names), len(variable_names)), dtype=int)
+                for i in range(len(variable_names)):
+                    for j in range(len(variable_names)):
+                        if i != j and pos[i] > pos[j]:
+                            pk[i, j] = 0          # x_i is after x_j in Stage 0's order: no directed path x_i -> x_j
+                model_warm = DirectLiNGAM(prior_knowledge=pk)
+            else:
+                model_warm = _make_learner(learner, wseed)
             model_warm.fit(transformed)
             adj_warm = pd.DataFrame(
                 _from_lingam(model_warm.adjacency_matrix_),

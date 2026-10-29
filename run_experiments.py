@@ -1101,8 +1101,9 @@ if __name__ == "__main__":
     exp.add_argument("--curvature_threshold", type=float, default=0.05,
                      help="auto: mean R² gain of Stage I's polynomial over a linear fit from which a window counts as curved")
     exp.add_argument("--stage0_threshold", type=float, default=0.5)
-    exp.add_argument("--stage0_output", type=str, default="learner", choices=["learner", "stage0"],
-                     help="in a routed window, report the learner's fit on the transformed window or Stage 0's DAG")
+    exp.add_argument("--stage0_output", type=str, default="learner", choices=["learner", "stage0", "learner_pk"],
+                     help="in a routed window, report the learner's fit on the transformed window, Stage 0's DAG, or "
+                          "DirectLiNGAM's fit constrained to Stage 0's order (prior_knowledge)")
     exp.add_argument("--stage0_regressor", type=str, default="mlp", choices=["mlp", "krr3", "poly3"])
     exp.add_argument("--legacy_postprocessing", action="store_true",
                      help="Pre-2026-10-06 deletion rule max(min_samples/2, 10p^2), scored before extraction (old 'before')")
