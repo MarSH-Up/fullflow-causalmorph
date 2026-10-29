@@ -9,24 +9,33 @@
 #
 #   ./relaunch.sh                      # stop, pull, resume where every step stopped
 #   ./relaunch.sh --archive noperm     # same, but start from scratch: results/<run> -> results/<run>_noperm
+#   ./relaunch.sh --v3                 # the same steps for run_v3.sh (results/v3, log results/v3.log)
 #   DRY_RUN=1 ./relaunch.sh ...        # print what would happen
 #
-# MAIN_N (default 3000) and the worker split W_ROB / W_STD / W_EXTRA pass through to run_all.sh.
+# MAIN_N (default 3000) and the worker split W_ROB / W_STD / W_EXTRA pass through to run_all.sh;
+# MAIN_N and WORKERS (default 40) to run_v3.sh.
 # The body is one function so that `git pull` can rewrite this file while it runs.
 
 main () {
   set -euo pipefail
   cd "$(dirname "${BASH_SOURCE[0]}")"
-  local archive="" dry="${DRY_RUN:-0}"
-  if [ "${1:-}" = "--archive" ]; then archive="${2:?--archive needs a suffix, e.g. noperm}"; fi
+  local archive="" dry="${DRY_RUN:-0}" v3=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --archive) archive="${2:?--archive needs a suffix, e.g. noperm}"; shift 2 ;;
+      --v3) v3=1; shift ;;
+      *) echo "unknown option $1" >&2; exit 1 ;;
+    esac
+  done
   do_ () { echo "+ $*"; [ "$dry" = 1 ] || "$@"; }
   local runs="robustness standardised review_extras"
-  local pat="run_all.sh|run_robustness.sh|run_standardised.sh|run_review_extras.sh|run_experiments.py|run_cdnod.py|generate_datasets.py|generate_dagma_benchmark.py"
+  [ "$v3" = 1 ] && runs="v3"
+  local pat="run_all.sh|run_v3.sh|run_robustness.sh|run_standardised.sh|run_review_extras.sh|run_experiments.py|run_cdnod.py|run_castor.py|generate_datasets.py|generate_dagma_benchmark.py"
 
   echo "== 1. stopping $(whoami)'s runs"
   if pgrep -u "$(whoami)" -f "$pat" > /dev/null; then
-    do_ pkill -u "$(whoami)" -f "run_all.sh|run_robustness.sh|run_standardised.sh|run_review_extras.sh" || true
-    do_ pkill -u "$(whoami)" -f "run_experiments.py|run_cdnod.py|generate_datasets.py|generate_dagma_benchmark.py" || true
+    do_ pkill -u "$(whoami)" -f "run_all.sh|run_v3.sh|run_robustness.sh|run_standardised.sh|run_review_extras.sh" || true
+    do_ pkill -u "$(whoami)" -f "run_experiments.py|run_cdnod.py|run_castor.py|generate_datasets.py|generate_dagma_benchmark.py" || true
     if [ "$dry" != 1 ]; then
       for _ in $(seq 1 30); do pgrep -u "$(whoami)" -f "$pat" > /dev/null || break; sleep 2; done
       if pgrep -u "$(whoami)" -f "$pat" > /dev/null; then
@@ -58,13 +67,28 @@ main () {
 
   echo "== 4. dependencies"
   export PYTHON="${PYTHON:-.venv/bin/python}"
-  "$PYTHON" -c "import ruptures, dagma, lingam, causallearn" || {
+  "$PYTHON" -c "import ruptures, dagma, lingam, causallearn, torch, sklearn" || {
     echo "ERROR: $PYTHON is missing a dependency; install it into .venv first, e.g."
     echo "   uv pip install --python .venv/bin/python 'ruptures==1.1.9'"; exit 1; }
   echo "   ok ($PYTHON)"
 
-  echo "== 5. starting run_all.sh"
   export MAIN_N="${MAIN_N:-3000}"
+  if [ "$v3" = 1 ]; then
+    echo "== 5. starting run_v3.sh"
+    export WORKERS="${WORKERS:-40}"
+    if [ "$dry" = 1 ]; then
+      echo "+ nohup ./run_v3.sh > results/v3.log 2>&1 &"
+    else
+      nohup ./run_v3.sh > results/v3.log 2>&1 &
+      sleep 5
+      head -3 results/v3.log
+    fi
+    echo
+    echo "follow it with:"
+    echo "   watch -n 60 $PYTHON tools/run_status.py --out results/v3"
+    exit 0
+  fi
+  echo "== 5. starting run_all.sh"
   if [ "$dry" = 1 ]; then
     echo "+ nohup ./run_all.sh > results/run_all.log 2>&1 &"
   else
