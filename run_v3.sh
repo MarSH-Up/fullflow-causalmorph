@@ -17,7 +17,8 @@
 #   det_v1O_rank v1O + rank validation                              }
 #   det_pelt     PELT alone                                         }
 #   det_pelt_rank PELT + rank validation                            }
-#   castor       CASTOR (linear EM, window L) on the whole series
+#   castor       CASTOR (linear EM, window L) on the whole series, on every CASTOR_STEP-th held-out id
+#                (default every 4th: 150 per cell; its cost grows about quadratically with the series length)
 # on the MAIN_N stratified held-out ids per cell (the previous run's main_ids.txt minus the 150
 # local tuning scenarios):
 #   main         the method + baselines; cdnod_fz is copied from $STD (it does not depend on windows)
@@ -49,9 +50,12 @@ FIXED_L="${FIXED_L:-500}"
 DET="${DET:-union}"
 MAIN_N="${MAIN_N:-3000}"
 LOCAL_IDS="${LOCAL_IDS:-results/robustness/grid_ids.txt}"   # scenarios used to fix Stage 0's thresholds locally: excluded from main
+CASTOR_STEP="${CASTOR_STEP:-4}"   # CASTOR runs on every CASTOR_STEP-th held-out id (1 = all 600)
 IDS="$REF/kci_ids.txt"
 [ -f "$IDS" ] || { echo "missing $IDS" >&2; exit 1; }
 LOG="$OUT/logs"; mkdir -p "$LOG"
+CASTOR_IDS="$OUT/castor_ids.txt"
+[ -f "$CASTOR_IDS" ] || awk -v k="$CASTOR_STEP" 'NF && (NR % k == 1 || k == 1)' "$IDS" > "$CASTOR_IDS"
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 NUMEXPR_NUM_THREADS=1 PYTHONHASHSEED=0
 
 dataset_for () { if [ "$1" = "lin_laplace" ]; then echo datasets; else echo "${DATA_PREFIX}$1"; fi; }
@@ -77,13 +81,13 @@ want_for () {
   case "$1" in
     main|dagma_tuned) if [ "$MAIN_N" -gt 0 ]; then grep -c . "$OUT/main_ids.txt"; else echo $(( $(wc -l < "$(dataset_for "$2")/index.csv") - 1 )); fi ;;
     external) echo $(( $(wc -l < "$EXT/index.csv") - 1 )) ;;
-    castor) if [ "$2" = external ]; then echo $(( $(wc -l < "$EXT/index.csv") - 1 )); else grep -c . "$IDS"; fi ;;
+    castor) if [ "$2" = external ]; then echo $(( $(wc -l < "$EXT/index.csv") - 1 )); else grep -c . "$CASTOR_IDS"; fi ;;
     *) grep -c . "$IDS" ;;
   esac
 }
 
 { echo "git: $(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
-  echo "cells: $CELLS | ids: $IDS | main: $MAIN_N | detector: $DET + rank | L: $FIXED_L | external: $EXT | steps: $STEPS | workers: $WORKERS"; } | tee "$OUT/RUN_INFO.txt"
+  echo "cells: $CELLS | ids: $IDS | main: $MAIN_N | detector: $DET + rank | L: $FIXED_L | external: $EXT | castor ids: $(grep -c . "$CASTOR_IDS") per cell | steps: $STEPS | workers: $WORKERS"; } | tee "$OUT/RUN_INFO.txt"
 : > "$OUT/PLAN.tsv"   # read by tools/run_status.py
 for step in $STEPS; do
   case "$step" in
@@ -123,7 +127,7 @@ for step in $STEPS; do
     echo "   CASTOR at $(git -C third_party/CASTOR rev-parse --short HEAD)" | tee -a "$OUT/RUN_INFO.txt"
     for c in $CELLS; do
       run "$c/castor" "$OUT/$c/castor" "$(want_for castor "$c")" "$PYTHON" -u tools/run_castor.py --dataset_dir "$(dataset_for "$c")" --output_dir "$OUT/$c/castor" \
-          --scenario_ids_file "$IDS" --window "$FIXED_L" --permute_variables --workers "$WORKERS" --resume
+          --scenario_ids_file "$CASTOR_IDS" --window "$FIXED_L" --permute_variables --workers "$WORKERS" --resume
     done
     run "external/castor" "$OUT/external/castor" "$(want_for castor external)" "$PYTHON" -u tools/run_castor.py --dataset_dir "$EXT" --output_dir "$OUT/external/castor" \
         --window "$FIXED_L" --permute_variables --workers "$WORKERS" --resume
