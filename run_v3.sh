@@ -117,6 +117,10 @@ for step in $STEPS; do
     continue
   fi
   if [ "$step" = castor ]; then
+    if [ ! -d third_party/CASTOR ]; then
+      git clone -q https://github.com/arahmani1/CASTOR third_party/CASTOR && git -C third_party/CASTOR checkout -q b425ebcf3beba4259a6af6a0d11e0739c2cfbcf2
+    fi
+    echo "   CASTOR at $(git -C third_party/CASTOR rev-parse --short HEAD)" | tee -a "$OUT/RUN_INFO.txt"
     for c in $CELLS; do
       run "$c/castor" "$OUT/$c/castor" "$(want_for castor "$c")" "$PYTHON" -u tools/run_castor.py --dataset_dir "$(dataset_for "$c")" --output_dir "$OUT/$c/castor" \
           --scenario_ids_file "$IDS" --window "$FIXED_L" --permute_variables --workers "$WORKERS" --resume
