@@ -53,6 +53,8 @@ for cell in "$@"; do
       v3_auto)      extra=(--detector v1O --transform v3 --stage0 auto --stage0_output stage0 --curvature_threshold "$CURV" --stage0_threshold "$GATE" --no_ablation) ;;
       v2_auto)      extra=(--detector v1O --transform v2cap --stage0 auto --stage0_output stage0 --curvature_threshold "$CURV" --stage0_threshold "$GATE" --no_ablation) ;;
       baselines)    extra=(--detector v1O --transform v2cap --ablation_methods dagma_paper,icalingam) ;;
+      pelt_rank)    extra=(--detector pelt --cut_filter rank --transform v2cap --stage0 auto --stage0_output stage0 --no_ablation) ;;
+      union_rank)   extra=(--detector union --cut_filter rank --transform v2cap --stage0 auto --stage0_output stage0 --no_ablation) ;;
       pelt)         extra=(--detector pelt --transform v2cap --stage0 auto --stage0_output stage0 --no_ablation) ;;
       filt_bic)     extra=(--detector v1O --cut_filter bic --transform v2cap --stage0 auto --stage0_output stage0 --no_ablation) ;;
       filt_rank)    extra=(--detector v1O --cut_filter rank --transform v2cap --stage0 auto --stage0_output stage0 --no_ablation) ;;
@@ -62,7 +64,7 @@ for cell in "$@"; do
       det_v1X_g*)   extra=(--detector v1X --corr_gamma_xi "${cfg#det_v1X_g}" --transform v2cap --stage0 auto --stage0_output stage0 --no_ablation) ;;
       *) echo "unknown config '$cfg'" >&2; exit 1 ;;
     esac
-    reuse=(); case "$cfg" in v2cap|det_*|filt_*|pelt) ;; *) reuse=(--cps_from "$OUT/$name/v2cap/results.csv") ;; esac
+    reuse=(); case "$cfg" in v2cap|det_*|filt_*|pelt*|union*) ;; *) reuse=(--cps_from "$OUT/$name/v2cap/results.csv") ;; esac
     run "$name/$cfg" "$dir" "$PYTHON" -u run_experiments.py --dataset_dir "$ds" --output_dir "$dir" "${BASE[@]}" "${extra[@]}" ${reuse[@]+"${reuse[@]}"}
   done
 done

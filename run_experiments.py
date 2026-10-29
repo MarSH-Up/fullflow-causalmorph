@@ -528,6 +528,15 @@ def run_loaded(
                 det_result, cps_det = None, list(cps_from.get(meta["scenario_id"], []))
             elif detector_version == "pelt":
                 det_result, cps_det = None, pelt_change_points(X, min_size=min_regime_len)
+            elif detector_version == "union":
+                # candidates from both v1O and PELT (PELT cuts closer than 160 samples to a v1O cut are dropped);
+                # meant for --cut_filter, which keeps the candidates that pay the segment-level penalty
+                det_result = detect_change_points(
+                    X, baseline_end=baseline_end, min_regime_len=min_regime_len, seed=seed, detector_version="v1O",
+                    corr_gamma=corr_gamma, adaptive_null=adaptive_null, corr_gamma_rank=corr_gamma_rank, corr_gamma_xi=corr_gamma_xi)
+                v1o = detection_cps(det_result)
+                cps_det = sorted(set(v1o) | {c for c in pelt_change_points(X, min_size=min_regime_len) if not any(abs(c - d) < 160 for d in v1o)})
+                det_result.change_points = cps_det; det_result.onset_points = cps_det; det_result.offset_points = []
             else:
                 det_result = detect_change_points(
                     X, baseline_end=baseline_end, min_regime_len=min_regime_len,
@@ -539,7 +548,7 @@ def run_loaded(
                 onset_set = set(det_result.onset_points) if det_result is not None else set(cps_det)
                 cps_det = legacy_prune(cps_det, onset_set, T, p, min_samples)
             n_cps_raw = len(cps_det)
-            if det_result is not None and cut_filter != "none":
+            if (det_result is not None or detector_version == "pelt") and cut_filter != "none":
                 cps_det = bic_filter_cps(X, cps_det, cut_filter)   # segment-level validation of the detector's cuts
             eval_result = evaluate_detection(true_cps, cps_det, tolerance=det_tolerance)
 
@@ -1003,7 +1012,7 @@ if __name__ == "__main__":
                         help="Progress-reporting group size (default: 100)")
     parser.add_argument("--workers",        type=int,   default=None,
                         help="Parallel worker processes (default: cpu_count // 2)")
-    parser.add_argument("--detector",       type=str,   default="v1G", choices=["v1F", "v1G", "v1H", "v1I", "v1J", "v1K", "v1L", "v1M", "v1N", "v1O", "v1P", "v1X", "pelt"],
+    parser.add_argument("--detector",       type=str,   default="v1G", choices=["v1F", "v1G", "v1H", "v1I", "v1J", "v1K", "v1L", "v1M", "v1N", "v1O", "v1P", "v1X", "pelt", "union"],
                         help="Detector version (default: v1G). "
                              "v1H = strict correlation-based detector, ~92%% precision vs v1G's ~52%%. "
                              "v1I = wavelet-coherence-based detector (Grinsted et al. 2004); "
