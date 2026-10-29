@@ -52,17 +52,33 @@ def rows_for(cell, main_step="main"):
     return rows, col(m, "mean_norm_shd")
 
 
+def holm(pvals):
+    """Holm step-down adjusted p-values (nan kept)."""
+    idx = [i for i, v in enumerate(pvals) if np.isfinite(v)]
+    out = [np.nan] * len(pvals)
+    order = sorted(idx, key=lambda i: pvals[i]); m = len(order); running = 0.0
+    for rank, i in enumerate(order):
+        running = max(running, (m - rank) * pvals[i]); out[i] = min(running, 1.0)
+    return out
+
+
 def table(columns):
+    """nSHD, skeleton F1 and paired tables; in the paired table '*' marks a 95% CI excluding 0 and
+    '†' a Wilcoxon p below 0.05 after Holm's correction over the rows of the same column."""
     labels = list(dict.fromkeys(l for rows, _ in columns.values() for l in rows))
     M = pd.DataFrame(index=labels, columns=list(columns), dtype=object); S, P = M.copy(), M.copy()
     for c, (rows, ref) in columns.items():
+        res = {}
         for l, (s, sk) in rows.items():
             if s is not None and len(s.dropna()):
                 M.loc[l, c] = f"{s.mean():.3f}"
             if sk is not None and len(sk.dropna()):
                 S.loc[l, c] = f"{sk.mean():.3f}"
             if not l.startswith("Method") and s is not None and ref is not None:
-                P.loc[l, c] = fmt(paired(ref, s))
+                res[l] = paired(ref, s)
+        adj = holm([r["p"] if r else np.nan for r in res.values()])
+        for (l, r), pa in zip(res.items(), adj):
+            P.loc[l, c] = fmt(r) + (" †" if np.isfinite(pa) and pa < 0.05 else "")
     return M.fillna("-"), S.fillna("-"), P.fillna("-")
 
 
@@ -104,7 +120,7 @@ def main():
     M, S, P = table(grid)
     print("TABLE 1: mean nSHD (lower is better)\n" + M.to_string())
     print("\nskeleton F1 (higher is better)\n" + S.to_string())
-    print("\npaired: method - row (mean [95% CI] scenarios where the method is lower/higher; * = CI excludes 0)\n" + P.to_string())
+    print("\npaired: method - row (mean [95% CI] scenarios where the method is lower/higher; * = CI excludes 0; † = Wilcoxon p < 0.05 after Holm per column)\n" + P.to_string())
     app = {}
     for c in CELLS:
         m600 = load(c, "main600"); ref = col(m600, "mean_norm_shd")
