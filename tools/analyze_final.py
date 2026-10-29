@@ -14,6 +14,7 @@ Sources (all on standardised windows, permuted variables, L = 500):
   external benchmark                                           results/robustness/external/*
 
   python tools/analyze_final.py > results/final_tables.txt
+  RESULTS_ROOT=server_results/<date> python tools/analyze_final.py   # a copy fetched from the server
 """
 import os
 import sys
@@ -22,7 +23,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import wilcoxon
 
-ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+ROOT = os.path.abspath(os.environ.get("RESULTS_ROOT") or os.path.join(os.path.dirname(__file__), ".."))
 R = lambda *p: os.path.join(ROOT, "results", *p)  # noqa: E731
 CELLS = ["lin_laplace", "nonlin_laplace", "lin_normal", "nonlin_normal"]
 TOL = 200
@@ -95,7 +96,7 @@ def rows_for_grid(cell):
         "random-order regression": (col(main, "randomregress_mean_norm_shd"), None, "main"),
     }
     for step, label in (("oracle_seg", "oracle segmentation"), ("oracle_L", "oracle bound L"), ("L1000", "L = 1000"),
-                        ("lite", "without Stage II")):
+                        ("lite", "Stage II removed")):
         d = load("standardised", cell, step)
         appendix[f"With {label} (600)"] = (col(d, "mean_norm_shd"), col(d, "mean_skeleton_f1"), "kci")
     return rows, appendix, {"main": rows["Method (DirectLiNGAM + v2)"][0], "kci": rows["Method (600 KCI ids)"][0]}
