@@ -21,10 +21,11 @@ import numpy as np
 import pandas as pd
 
 warnings.filterwarnings("ignore")
+EXTRA = os.environ.get("EXTRA", "0") == "1"   # also DAGMA (paper configuration) and CausalMorph v2 + ICA-LiNGAM per window
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT); sys.path.insert(0, os.path.join(ROOT, "causalmorph")); sys.path.insert(0, os.path.join(ROOT, "tools"))
 from run_experiments import load_scenario  # noqa: E402
-from full_pipeline import _to_causalmorph, _standardize_window, compute_shd, _apply_transform  # noqa: E402
+from full_pipeline import _to_causalmorph, _standardize_window, compute_shd, _apply_transform, _fit_window_learner, _make_learner, _from_lingam  # noqa: E402
 from core.causalmorph_v2 import causalmorph_v2, gate_share, curvature_share, curvature_gain  # noqa: E402
 from core.stage0 import stage0  # noqa: E402
 from causalmorph_diagnosis import dl_fit  # noqa: E402
@@ -52,6 +53,12 @@ def one(args):
         row["s0"] = compute_shd(A0, T)["normalized_shd"]
         row["pc"] = compute_shd(pc_cpdag(W.to_numpy(float)), T)["normalized_shd"]
         row["empty"] = compute_shd(np.zeros_like(T), T)["normalized_shd"]
+        if EXTRA:
+            row["dagma"] = compute_shd(_fit_window_learner("dagma_paper", W, names, r)[0], T)["normalized_shd"]
+            ica = _make_learner("icalingam", r).fit(W)                                   # the paper's previous pipeline: CausalMorph v2 + ICA-LiNGAM
+            est_i = pd.DataFrame((np.abs(_from_lingam(ica.adjacency_matrix_)) > 0.05).astype(float), index=names, columns=names)
+            Zi = _apply_transform("v2cap", W, list(ica.causal_order_), est_i, r)
+            row["ica"] = compute_shd(_from_lingam(_make_learner("icalingam", r).fit(Zi).adjacency_matrix_), T)["normalized_shd"]
         rows.append(row)
     return rows
 
@@ -65,7 +72,7 @@ def route(D, tc, tg, nmin, col="r2"):
 def report(D):
     pd.set_option("display.width", 250)
     order = list(dict.fromkeys(D.cell)); g = D.groupby("cell", sort=False)
-    out = g[["lingam", "lingam3", "s0", "pc", "empty"]].mean()
+    out = g[[c for c in ("lingam", "lingam3", "s0", "pc", "dagma", "ica", "empty") if c in D]].mean()
     out["best of 3"] = g.apply(lambda x: x[["lingam", "s0", "pc"]].min(axis=1).mean())
     out["gate"] = g.gate.mean(); out["curve"] = g.curve.mean(); out["r2 gain"] = g.r2.mean(); out["windows"] = g.size()
     print("mean nSHD per path (oracle windows), mean gate share, curvature share (degree >= 2) and R² gain\n" + out.round(3).reindex(order).to_string())

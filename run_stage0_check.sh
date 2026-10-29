@@ -12,6 +12,7 @@
 #   v3_auto        routing by identifiability source: curved windows (CURV, default 0.05) to Stage 0,
 #                  linear Gaussian windows (GATE, default 0.5) to PC's CPDAG, the rest to the LiNGAM path
 #   v2_auto        the same routing with the paper's v2cap transform on the LiNGAM path
+#   baselines      DAGMA (paper configuration) and ICA-LiNGAM on the same windows (ablation columns)
 #
 #   PYTHON=... WORKERS=10 ./run_stage0_check.sh lin_laplace=path/ds_lin_laplace tanh_unit_normal=path/ds_tanh_unit_normal
 #   python tools/analyze_stage0_check.py results/stage0_check
@@ -51,6 +52,7 @@ for cell in "$@"; do
       v3_always_s0) extra=(--transform v3 --stage0 always --stage0_output stage0 --no_ablation) ;;
       v3_auto)      extra=(--transform v3 --stage0 auto --stage0_output stage0 --curvature_threshold "$CURV" --stage0_threshold "$GATE" --no_ablation) ;;
       v2_auto)      extra=(--transform v2cap --stage0 auto --stage0_output stage0 --curvature_threshold "$CURV" --stage0_threshold "$GATE" --no_ablation) ;;
+      baselines)    extra=(--transform v2cap --ablation_methods dagma_paper,icalingam) ;;
       *) echo "unknown config '$cfg'" >&2; exit 1 ;;
     esac
     reuse=(); [ "$cfg" = v2cap ] || reuse=(--cps_from "$OUT/$name/v2cap/results.csv")

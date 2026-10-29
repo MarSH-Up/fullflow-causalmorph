@@ -41,7 +41,18 @@ def main(out):
                 s[k] = base[sk].mean() if sk in base else np.nan
         for cfg in sorted(os.listdir(os.path.join(out, c))):
             d = load(os.path.join(out, c, cfg, "results.csv"))
-            if d is None:
+            if d is None or cfg == "logs":
+                continue
+            if cfg == "cdnod_fz":
+                m["CD-NOD Fisher-z"] = d.mean_norm_shd.mean(); s["CD-NOD Fisher-z"] = d.mean_skeleton_f1.mean()
+                p["CD-NOD Fisher-z"] = fmt(paired(base.mean_norm_shd, d.mean_norm_shd))
+                m["CD-NOD vs union"] = d.union_norm_shd.mean(); s["CD-NOD vs union"] = d.union_skeleton_f1.mean()
+                continue
+            if cfg == "baselines":
+                for k, col in (("DAGMA paper cfg", "dagma_paper_mean_norm_shd"), ("ICA-LiNGAM alone", "icalingam_mean_norm_shd")):
+                    if col in d:
+                        m[k] = d[col].mean(); s[k] = d[col.replace("norm_shd", "skeleton_f1")].mean()
+                        p[k] = fmt(paired(base.mean_norm_shd, d[col]))
                 continue
             m[cfg] = d.mean_norm_shd.mean(); s[cfg] = d.mean_skeleton_f1.mean()
             p[cfg] = "-" if cfg == "v2cap" else fmt(paired(d.mean_norm_shd, base.mean_norm_shd.reindex(d.index)))
