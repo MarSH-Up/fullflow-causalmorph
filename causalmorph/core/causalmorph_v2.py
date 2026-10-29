@@ -47,8 +47,9 @@ def _max_degree_for(n: int, k: int, ratio: float = _STAGE1_FEATURE_RATIO, ceilin
     return best
 
 
-def _linearise(P_scaled: np.ndarray, y: np.ndarray, max_degree: int) -> Tuple[np.ndarray, np.ndarray]:
-    """(tangent plane at the median, polynomial fit) of the MDL-selected polynomial of y on the parents."""
+def _linearise(P_scaled: np.ndarray, y: np.ndarray, max_degree: int) -> Tuple[np.ndarray, np.ndarray, int, float]:
+    """(tangent plane at the median, polynomial fit, degree, R² gain of the polynomial over the
+    linear fit) of the MDL-selected polynomial of y on the parents."""
     from sklearn.linear_model import LinearRegression
     from sklearn.pipeline import make_pipeline
     from sklearn.preprocessing import PolynomialFeatures
@@ -58,13 +59,26 @@ def _linearise(P_scaled: np.ndarray, y: np.ndarray, max_degree: int) -> Tuple[np
     x0 = np.median(P_scaled, axis=0); f0 = model.predict(x0[None])[0]
     eps = 1e-2
     J = np.array([(model.predict((x0 + eps * np.eye(P_scaled.shape[1])[i])[None])[0] - f0) / eps for i in range(P_scaled.shape[1])])
-    return f0 + (P_scaled - x0) @ J, model.predict(P_scaled)
+    gain = model.score(P_scaled, y) - LinearRegression().fit(P_scaled, y).score(P_scaled, y)
+    return f0 + (P_scaled - x0) @ J, model.predict(P_scaled), deg, max(gain, 0.0)
 
 
 def gate_share(details: Dict[str, dict]) -> float:
     """Share of the non-root nodes whose residual the Stage II gate mapped (nan if none was processed)."""
     recs = [d for d in details.values() if d["skipped"] is None]
     return sum(int(d["gated"]) for d in recs) / len(recs) if recs else float("nan")
+
+
+def curvature_gain(details: Dict[str, dict]) -> float:
+    """Mean R² gain of the Stage I polynomial over a linear fit across the non-root nodes (nan if none)."""
+    recs = [d for d in details.values() if d["skipped"] is None]
+    return float(np.mean([d["r2_gain"] for d in recs])) if recs else float("nan")
+
+
+def curvature_share(details: Dict[str, dict]) -> float:
+    """Share of the non-root nodes whose MDL-selected polynomial has degree >= 2 (nan if none was processed)."""
+    recs = [d for d in details.values() if d["skipped"] is None]
+    return sum(int(d["degree"] >= 2) for d in recs) / len(recs) if recs else float("nan")
 
 
 def _rank_map_to_laplace(eps: np.ndarray) -> np.ndarray:
@@ -142,7 +156,7 @@ def causalmorph_v2(
             continue                                        # root: untouched, not reported
         max_degree = _max_degree_for(n, len(parents)) if stage1_cap else _STAGE1_MAX_DEGREE
         rec = {"gated": False, "jb_p": float("nan"), "residual_before": None,
-               "residual_after": None, "skipped": None, "max_degree": max_degree}
+               "residual_after": None, "skipped": None, "max_degree": max_degree, "degree": 0, "r2_gain": 0.0}
         details[name] = rec
         y = X_vals[:, idx]
         P = X_new[:, parents]                                # transformed parents
@@ -152,7 +166,7 @@ def causalmorph_v2(
             rec["skipped"] = "constant_parent"; continue
         try:
             P_scaled = StandardScaler().fit_transform(P)
-            y_lin, y_poly = _linearise(P_scaled, y, max_degree)
+            y_lin, y_poly, rec["degree"], rec["r2_gain"] = _linearise(P_scaled, y, max_degree)
         except Exception as exc:                             # noqa: BLE001 — v1 behaviour
             rec["skipped"] = f"stage1:{type(exc).__name__}"; continue
         eps = y - (y_poly if stage1 == "poly" else y_lin)

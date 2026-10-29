@@ -9,6 +9,9 @@
 #   v3_gauss       + Stage 0 in the windows the gate calls Gaussian, regime graph = learner's fit
 #   v3_gauss_s0    same, regime graph = Stage 0's DAG
 #   v3_always_s0   Stage 0 in every window, regime graph = Stage 0's DAG
+#   v3_auto        routing by identifiability source: curved windows (CURV, default 0.05) to Stage 0,
+#                  linear Gaussian windows (GATE, default 0.5) to PC's CPDAG, the rest to the LiNGAM path
+#   v2_auto        the same routing with the paper's v2cap transform on the LiNGAM path
 #
 #   PYTHON=... WORKERS=10 ./run_stage0_check.sh lin_laplace=path/ds_lin_laplace tanh_unit_normal=path/ds_tanh_unit_normal
 #   python tools/analyze_stage0_check.py results/stage0_check
@@ -19,7 +22,8 @@ PYTHON="${PYTHON:-python}"
 WORKERS="${WORKERS:-10}"
 OUT="${OUT:-results/stage0_check}"
 FIXED_L="${FIXED_L:-500}"
-CONFIGS="${CONFIGS:-v2cap v3 v3_gauss v3_gauss_s0 v3_always_s0}"
+CONFIGS="${CONFIGS:-v2cap v3 v3_gauss v3_gauss_s0 v3_always_s0 v3_auto v2_auto}"
+CURV="${CURV:-0.05}"; GATE="${GATE:-0.5}"
 LOG="$OUT/logs"; mkdir -p "$LOG"
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 NUMEXPR_NUM_THREADS=1 PYTHONHASHSEED=0
 BASE=(--detector v1O --corr_gamma 2.5 --corr_gamma_rank 1.5 --no-hybrid --chain_prior_threshold 0.05
@@ -45,6 +49,8 @@ for cell in "$@"; do
       v3_gauss)     extra=(--transform v3 --stage0 gauss --no_ablation) ;;
       v3_gauss_s0)  extra=(--transform v3 --stage0 gauss --stage0_output stage0 --no_ablation) ;;
       v3_always_s0) extra=(--transform v3 --stage0 always --stage0_output stage0 --no_ablation) ;;
+      v3_auto)      extra=(--transform v3 --stage0 auto --stage0_output stage0 --curvature_threshold "$CURV" --stage0_threshold "$GATE" --no_ablation) ;;
+      v2_auto)      extra=(--transform v2cap --stage0 auto --stage0_output stage0 --curvature_threshold "$CURV" --stage0_threshold "$GATE" --no_ablation) ;;
       *) echo "unknown config '$cfg'" >&2; exit 1 ;;
     esac
     reuse=(); [ "$cfg" = v2cap ] || reuse=(--cps_from "$OUT/$name/v2cap/results.csv")

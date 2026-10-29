@@ -70,13 +70,36 @@ def residual(kind: str, X: np.ndarray, y: np.ndarray) -> np.ndarray:
     return y - m.fit(X, y).predict(X)
 
 
-def pc_skeleton(X: np.ndarray, alpha: float = 0.05) -> np.ndarray:
-    """Undirected adjacency of PC with Fisher-z tests (causal-learn)."""
+def _pc_graph(X: np.ndarray, alpha: float) -> np.ndarray:
     from causallearn.search.ConstraintBased.PC import pc
     with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
         cg = pc(np.asarray(X, float), alpha=alpha, indep_test="fisherz", show_progress=False)
-    g = np.asarray(cg.G.graph)
+    return np.asarray(cg.G.graph)
+
+
+def pc_skeleton(X: np.ndarray, alpha: float = 0.05) -> np.ndarray:
+    """Undirected adjacency of PC with Fisher-z tests (causal-learn)."""
+    g = _pc_graph(X, alpha)
     return ((g != 0) | (g.T != 0)).astype(float)
+
+
+def pc_cpdag(X: np.ndarray, alpha: float = 0.05) -> np.ndarray:
+    """PC's CPDAG as A[from, to] in {0, 1}: a directed edge in one direction, an undirected
+    edge in both (the convention the pipeline scores PC and CD-NOD with)."""
+    g = _pc_graph(X, alpha); p = g.shape[0]
+    A = np.zeros((p, p))
+    for i in range(p):
+        for j in range(i + 1, p):
+            a, b = g[i, j], g[j, i]
+            if a == 0 and b == 0:
+                continue
+            if a == -1 and b == 1:
+                A[i, j] = 1.0
+            elif a == 1 and b == -1:
+                A[j, i] = 1.0
+            else:
+                A[i, j] = A[j, i] = 1.0
+    return A
 
 
 def orient_skeleton(X: np.ndarray, skel: np.ndarray, regressor: str = "mlp") -> Tuple[np.ndarray, List[int]]:

@@ -466,6 +466,7 @@ def run_loaded(
     stage0_threshold: float = 0.5,
     stage0_output: str = "learner",
     stage0_regressor: str = "mlp",
+    curvature_threshold: float = 0.05,
 ) -> dict:
     """
     Run the pipeline on an already-loaded scenario. Returns a flat metrics dict.
@@ -555,6 +556,7 @@ def run_loaded(
                 learner=learner, seed=seed,
                 transform=transform, standardize=standardize_windows, prior_shuffle=prior_shuffle,
                 stage0=stage0, stage0_threshold=stage0_threshold, stage0_output=stage0_output, stage0_regressor=stage0_regressor,
+                curvature_threshold=curvature_threshold,
             )
             for s_ in structures:
                 tr = assign_true_regime(s_.window_start, s_.window_end, true_cps, T)
@@ -619,6 +621,8 @@ def run_loaded(
             "stage0_output":      stage0_output,
             "n_stage0_windows":   int(sum(1 for s in structures if getattr(s, "stage0_used", False))),
             "mean_gate_share":    float(np.nanmean([getattr(s, "gate_share", np.nan) for s in structures])) if structures else np.nan,
+            "mean_curvature":     float(np.nanmean([getattr(s, "curvature", np.nan) for s in structures])) if structures else np.nan,
+            "n_pc_windows":       int(sum(1 for s in structures if getattr(s, "route", "") == "pc")),
             "n_transform_failed": int(sum(1 for s in structures if getattr(s, "transform_failed", False))),
         })
         for k in CONFIRM_MIN_DIFF:
@@ -1068,9 +1072,12 @@ if __name__ == "__main__":
                      help="structure learner fitted after CausalMorph (and used for the cold prior)")
     exp.add_argument("--transform",            type=str, default="v1", choices=["v1", "v2", "lite", "v2cap", "litecap", "v3", "none"],
                      help="preconditioner before the learner: v1 (published CausalMorph), v2 (gated sample-wise), lite (v2 without stage II), v2cap / litecap (v2 / lite with the Stage I degree cap), none")
-    exp.add_argument("--stage0", type=str, default="off", choices=["off", "gauss", "always"],
+    exp.add_argument("--stage0", type=str, default="off", choices=["off", "gauss", "always", "auto"],
                      help="CausalMorph Stage 0 (PC skeleton + nonparametric sink orientation) as the prior: in every window, "
-                          "or only when the Stage II gate calls at least --stage0_threshold of the tentative residuals Gaussian")
+                          "only when the Stage II gate calls at least --stage0_threshold of the tentative residuals Gaussian, "
+                          "or auto: curved windows (--curvature_threshold) to Stage 0, linear Gaussian windows to PC's CPDAG, the rest to LiNGAM")
+    exp.add_argument("--curvature_threshold", type=float, default=0.05,
+                     help="auto: mean R² gain of Stage I's polynomial over a linear fit from which a window counts as curved")
     exp.add_argument("--stage0_threshold", type=float, default=0.5)
     exp.add_argument("--stage0_output", type=str, default="learner", choices=["learner", "stage0"],
                      help="in a routed window, report the learner's fit on the transformed window or Stage 0's DAG")
@@ -1112,5 +1119,6 @@ if __name__ == "__main__":
         cps_from=_read_cps(args.cps_from) if args.cps_from else None,
         prior_shuffle=args.prior_shuffle,
         stage0=args.stage0, stage0_threshold=args.stage0_threshold, stage0_output=args.stage0_output, stage0_regressor=args.stage0_regressor,
+        curvature_threshold=args.curvature_threshold,
         permute_variables=args.permute_variables,
     )
