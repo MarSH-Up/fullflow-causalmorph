@@ -1048,8 +1048,9 @@ if __name__ == "__main__":
     exp.add_argument("--corr_gamma",           type=float, default=2.0,
                      help="v1J threshold margin: sqrt(2 ln m) + gamma")
     exp.add_argument("--corr_gamma_rank",      type=float, default=1.5,
-    exp.add_argument("--corr_gamma_xi", type=float, default=None, help="margin of the xi threshold (v1P, v1X); default corr_gamma_rank")
                      help="v1N, v1O: threshold margin of the Spearman detector (corr_gamma is the Pearson one)")
+    exp.add_argument("--corr_gamma_xi",        type=float, default=None,
+                     help="v1P, v1X: threshold margin of the xi detector (default corr_gamma_rank)")
     exp.add_argument("--adaptive_null",        action="store_true",
                      help="v1H: re-estimate the threshold from the segment since the last accepted change point")
     exp.add_argument("--det_tolerance",        type=int,   default=200,
