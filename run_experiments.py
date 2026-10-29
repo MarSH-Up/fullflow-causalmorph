@@ -462,6 +462,10 @@ def run_loaded(
     standardize_windows: bool = False,
     cps_from: Optional[dict] = None,
     prior_shuffle: bool = False,
+    stage0: str = "off",
+    stage0_threshold: float = 0.5,
+    stage0_output: str = "learner",
+    stage0_regressor: str = "mlp",
 ) -> dict:
     """
     Run the pipeline on an already-loaded scenario. Returns a flat metrics dict.
@@ -550,6 +554,7 @@ def run_loaded(
                 prior_density=(consensus_prior_density if consensus_prior_density is not None else 0.2),
                 learner=learner, seed=seed,
                 transform=transform, standardize=standardize_windows, prior_shuffle=prior_shuffle,
+                stage0=stage0, stage0_threshold=stage0_threshold, stage0_output=stage0_output, stage0_regressor=stage0_regressor,
             )
             for s_ in structures:
                 tr = assign_true_regime(s_.window_start, s_.window_end, true_cps, T)
@@ -610,6 +615,10 @@ def run_loaded(
             "transform":          transform,
             "standardize_windows": int(standardize_windows),
             "prior_shuffle":      int(prior_shuffle),
+            "stage0":             stage0,
+            "stage0_output":      stage0_output,
+            "n_stage0_windows":   int(sum(1 for s in structures if getattr(s, "stage0_used", False))),
+            "mean_gate_share":    float(np.nanmean([getattr(s, "gate_share", np.nan) for s in structures])) if structures else np.nan,
             "n_transform_failed": int(sum(1 for s in structures if getattr(s, "transform_failed", False))),
         })
         for k in CONFIRM_MIN_DIFF:
@@ -1057,8 +1066,15 @@ if __name__ == "__main__":
                           "(removes the variance ordering, Reisach et al. 2021); the detector is unaffected")
     exp.add_argument("--learner",              type=str, default="directlingam", choices=["directlingam", "icalingam"],
                      help="structure learner fitted after CausalMorph (and used for the cold prior)")
-    exp.add_argument("--transform",            type=str, default="v1", choices=["v1", "v2", "lite", "v2cap", "litecap", "none"],
+    exp.add_argument("--transform",            type=str, default="v1", choices=["v1", "v2", "lite", "v2cap", "litecap", "v3", "none"],
                      help="preconditioner before the learner: v1 (published CausalMorph), v2 (gated sample-wise), lite (v2 without stage II), v2cap / litecap (v2 / lite with the Stage I degree cap), none")
+    exp.add_argument("--stage0", type=str, default="off", choices=["off", "gauss", "always"],
+                     help="CausalMorph Stage 0 (PC skeleton + nonparametric sink orientation) as the prior: in every window, "
+                          "or only when the Stage II gate calls at least --stage0_threshold of the tentative residuals Gaussian")
+    exp.add_argument("--stage0_threshold", type=float, default=0.5)
+    exp.add_argument("--stage0_output", type=str, default="learner", choices=["learner", "stage0"],
+                     help="in a routed window, report the learner's fit on the transformed window or Stage 0's DAG")
+    exp.add_argument("--stage0_regressor", type=str, default="mlp", choices=["mlp", "krr3", "poly3"])
     exp.add_argument("--legacy_postprocessing", action="store_true",
                      help="Pre-2026-10-06 deletion rule max(min_samples/2, 10p^2), scored before extraction (old 'before')")
     args = parser.parse_args()
@@ -1095,5 +1111,6 @@ if __name__ == "__main__":
         standardize_windows=args.standardize_windows,
         cps_from=_read_cps(args.cps_from) if args.cps_from else None,
         prior_shuffle=args.prior_shuffle,
+        stage0=args.stage0, stage0_threshold=args.stage0_threshold, stage0_output=args.stage0_output, stage0_regressor=args.stage0_regressor,
         permute_variables=args.permute_variables,
     )

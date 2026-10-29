@@ -44,7 +44,8 @@ from detectors.detectors_wavelets import (
 from detectors.detectors_correlation import detect_correlation_changes
 from detectors.detectors_coherence import detect_coherence_changes
 from core.causalmorph_algorithm import causalMorph
-from core.causalmorph_v2 import causalmorph_v2
+from core.causalmorph_v2 import causalmorph_v2, gate_share
+from core.stage0 import stage0 as run_stage0, REGRESSORS as STAGE0_REGRESSORS
 from evaluation.metrics import evaluate_detection, simplify_transitions
 
 
@@ -72,6 +73,8 @@ class RegimeStructure:
     learner: str = "directlingam"                   # structure learner fitted after CausalMorph
     transform: str = "v1"                           # preconditioner: v1 | v2 | lite | v2cap | litecap | none
     transform_failed: bool = False                  # transform raised; raw window was used instead (bootstrap: any replica)
+    gate_share: float = float("nan")                # share of the tentative graph's residuals the Stage II gate called Gaussian
+    stage0_used: bool = False                       # Stage 0 (PC skeleton + nonparametric sink orientation) supplied the prior
 
 
 # ── SHD helpers ──────────────────────────────────────────────────────────────
@@ -131,7 +134,9 @@ def _causalmorph_seeded(X: pd.DataFrame, causal_order, adj_truth: pd.DataFrame, 
         np.random.set_state(state)
 
 
-TRANSFORMS = ("v1", "v2", "lite", "v2cap", "litecap", "none")
+TRANSFORMS = ("v1", "v2", "lite", "v2cap", "litecap", "v3", "none")
+STAGE0_MODES = ("off", "gauss", "always")
+STAGE0_OUTPUTS = ("learner", "stage0")
 
 
 def _apply_transform(transform: str, X: pd.DataFrame, causal_order, adj_truth: pd.DataFrame, seed: int) -> pd.DataFrame:
@@ -142,6 +147,9 @@ def _apply_transform(transform: str, X: pd.DataFrame, causal_order, adj_truth: p
       lite : v2 with Stage II off (linearise + orthogonalise only)
       v2cap, litecap : v2 / lite with Stage I's polynomial degree capped so the
              polynomial has at most n/10 features (causalmorph_v2 stage1_cap)
+      v3   : v2cap whose Stage I hands the polynomial residual (the noise
+             estimate) to Stages II and III, so the window becomes tangent
+             plane + aligned noise along the prior graph
       none : the raw window
     adj_truth is A[from, to]; conversion to the layout the transforms read
     happens here and nowhere else.
@@ -150,10 +158,20 @@ def _apply_transform(transform: str, X: pd.DataFrame, causal_order, adj_truth: p
         return X
     if transform == "v1":
         return _causalmorph_seeded(X, causal_order, adj_truth, seed)
+    if transform == "v3":
+        return causalmorph_v2(X, causal_order=list(causal_order), adjacency_matrix=_to_causalmorph(adj_truth),
+                              stage2="rankmap", stage1_cap=True, stage1="poly")
     if transform in ("v2", "lite", "v2cap", "litecap"):
         return causalmorph_v2(X, causal_order=list(causal_order), adjacency_matrix=_to_causalmorph(adj_truth),
                               stage2=("rankmap" if transform.startswith("v2") else "off"),
                               stage1_cap=transform.endswith("cap"))
+
+
+def _gate_share(X: pd.DataFrame, causal_order, adj_prior: pd.DataFrame) -> float:
+    """Share of the prior graph's non-root nodes whose polynomial residual the Stage II gate calls Gaussian."""
+    _, det = causalmorph_v2(X, causal_order=list(causal_order), adjacency_matrix=_to_causalmorph(adj_prior),
+                            stage2="rankmap", stage1_cap=True, stage1="poly", return_details=True)
+    return gate_share(det)
     raise ValueError(f"transform must be one of {TRANSFORMS}, got {transform!r}")
 
 
@@ -862,6 +880,10 @@ def extract_causal_structures(
     transform: str = "v1",
     standardize: bool = False,
     prior_shuffle: bool = False,
+    stage0: str = "off",
+    stage0_threshold: float = 0.5,
+    stage0_output: str = "learner",
+    stage0_regressor: str = "mlp",
 ) -> List[RegimeStructure]:
     """
     Iteratively extract causal structures from every detected regime window.
@@ -920,11 +942,25 @@ def extract_causal_structures(
       prior can be overridden by data and a strong one persists.
 
     window_overlap : fraction of the previous window to prepend to each window.
+
+    stage0 : "off" | "gauss" | "always" — in cold mode, replace the tentative
+      prior by Stage 0 (PC skeleton oriented by nonparametric sink removal,
+      core.stage0) in every window ("always") or only when the share of the
+      tentative graph's polynomial residuals the Stage II gate calls Gaussian
+      is at least stage0_threshold ("gauss"; a window whose tentative graph has
+      no non-root node is not routed). stage0_output: in a routed window the
+      regime's graph is the learner's fit on the transformed window
+      ("learner") or Stage 0's DAG itself ("stage0").
     """
     if prior_mode not in ("anchor", "chain", "cold"):
         raise ValueError(f"prior_mode must be 'anchor', 'chain' or 'cold', got {prior_mode!r}")
     if transform not in TRANSFORMS:
         raise ValueError(f"transform must be one of {TRANSFORMS}, got {transform!r}")
+    if stage0 not in STAGE0_MODES or stage0_output not in STAGE0_OUTPUTS or stage0_regressor not in STAGE0_REGRESSORS:
+        raise ValueError(f"stage0 must be one of {STAGE0_MODES}, stage0_output one of {STAGE0_OUTPUTS}, "
+                         f"stage0_regressor one of {STAGE0_REGRESSORS}")
+    if stage0 != "off" and (prior_mode != "cold" or hybrid or bootstrap_n > 0 or prior_shuffle):
+        raise ValueError("stage0 needs prior_mode='cold' without hybrid, bootstrap or prior_shuffle")
     T = len(X)
     boundaries = [0] + list(detected_change_points) + [T]
     raw_windows = list(zip(boundaries[:-1], boundaries[1:]))
@@ -964,6 +1000,7 @@ def extract_causal_structures(
 
         # ── Determine prior ──────────────────────────────────────────────────
         prior_source = "cold"
+        w_gate_share, stage0_used, stage0_adj = float("nan"), False, None
         if prev_causal_order is None or prior_mode == "cold":
             if prior_mode != "cold" and initial_adj is not None and initial_order is not None:
                 if verbose:
@@ -993,6 +1030,15 @@ def extract_causal_structures(
                                          for i in range(len(perm))])
                     causal_order_prior = perm
                     adj_prior = pd.DataFrame(shuffled, columns=variable_names, index=variable_names)
+                if stage0 != "off":
+                    w_gate_share = _gate_share(window_df, causal_order_prior, adj_prior)
+                    if stage0 == "always" or w_gate_share >= stage0_threshold:
+                        A0, order0 = run_stage0(window_df.values, regressor=stage0_regressor, seed=wseed)
+                        causal_order_prior = list(order0)
+                        adj_prior = pd.DataFrame(A0, columns=variable_names, index=variable_names)
+                        stage0_adj, stage0_used, prior_source = adj_prior, True, "stage0"
+                        if verbose:
+                            print(f"    Stage 0 (gate share {w_gate_share:.2f}): PC skeleton oriented by sink removal, {int(A0.sum())} edges")
                 # Cold result becomes the anchor for subsequent windows.
                 anchor_order = causal_order_prior
                 anchor_adj = adj_prior
@@ -1068,6 +1114,8 @@ def extract_causal_structures(
                 index=variable_names,
             )
             warm_order = list(model_warm.causal_order_)
+            if stage0_used and stage0_output == "stage0":
+                adj_warm, warm_order = stage0_adj.copy(), list(causal_order_prior)
 
         # ── Hybrid model selection ───────────────────────────────────────────
         if hybrid:
@@ -1131,6 +1179,8 @@ def extract_causal_structures(
             learner=learner,
             transform=transform,
             transform_failed=transform_failed,
+            gate_share=w_gate_share,
+            stage0_used=stage0_used,
         )
         structures.append(struct)
         prev_edge_probs = struct.edge_probs

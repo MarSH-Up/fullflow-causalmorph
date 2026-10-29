@@ -26,7 +26,6 @@ import pandas as pd
 from scipy.stats import jarque_bera, laplace, rankdata
 from sklearn.preprocessing import StandardScaler
 
-from .causalmorph_algorithm import taylor_linearize
 
 _EPS_VAR = 1e-8
 _MIN_ROWS = 20   # below this Stage I over-fits and the gate is meaningless
@@ -46,6 +45,26 @@ def _max_degree_for(n: int, k: int, ratio: float = _STAGE1_FEATURE_RATIO, ceilin
         if comb(k + d, d) - 1 <= ratio * n:
             best = d
     return best
+
+
+def _linearise(P_scaled: np.ndarray, y: np.ndarray, max_degree: int) -> Tuple[np.ndarray, np.ndarray]:
+    """(tangent plane at the median, polynomial fit) of the MDL-selected polynomial of y on the parents."""
+    from sklearn.linear_model import LinearRegression
+    from sklearn.pipeline import make_pipeline
+    from sklearn.preprocessing import PolynomialFeatures
+    from .causalmorph_algorithm import best_polynomial_degree_mdl
+    deg = best_polynomial_degree_mdl(P_scaled, y, max_degree=max_degree, lam=2.0)
+    model = make_pipeline(PolynomialFeatures(degree=deg, include_bias=False), LinearRegression()).fit(P_scaled, y)
+    x0 = np.median(P_scaled, axis=0); f0 = model.predict(x0[None])[0]
+    eps = 1e-2
+    J = np.array([(model.predict((x0 + eps * np.eye(P_scaled.shape[1])[i])[None])[0] - f0) / eps for i in range(P_scaled.shape[1])])
+    return f0 + (P_scaled - x0) @ J, model.predict(P_scaled)
+
+
+def gate_share(details: Dict[str, dict]) -> float:
+    """Share of the non-root nodes whose residual the Stage II gate mapped (nan if none was processed)."""
+    recs = [d for d in details.values() if d["skipped"] is None]
+    return sum(int(d["gated"]) for d in recs) / len(recs) if recs else float("nan")
 
 
 def _rank_map_to_laplace(eps: np.ndarray) -> np.ndarray:
@@ -91,15 +110,24 @@ def causalmorph_v2(
     gate_alpha: float = 0.01,
     return_details: bool = False,
     stage1_cap: bool = False,
+    stage1: str = "tangent",
 ) -> Union[pd.DataFrame, Tuple[pd.DataFrame, Dict[str, dict]]]:
     """
     stage1_cap: cap Stage I's polynomial degree with _max_degree_for(n, k) so
     the polynomial has at most n/10 features. Off by default (the behaviour
     reported in §14 of the improvement plan); the pipeline exposes it as the
     v2cap / litecap transforms.
+    stage1: which residual Stage I hands to Stages II and III. "tangent" (v1,
+    v2): y minus the tangent plane at the median, so the curvature of the
+    polynomial stays in the residual and the gate sees curvature as
+    non-Gaussianity. "poly" (v3): y minus the polynomial itself, so the
+    residual is the noise estimate and the window becomes tangent plane +
+    noise, i.e. a linear structural equation in the parents.
     """
     if stage2 not in ("rankmap", "off"):
         raise ValueError(f"stage2 must be 'rankmap' or 'off', got {stage2!r}")
+    if stage1 not in ("tangent", "poly"):
+        raise ValueError(f"stage1 must be 'tangent' or 'poly', got {stage1!r}")
     var_names = list(X.columns)
     X_vals = X.to_numpy(dtype=float)
     X_new = X_vals.copy()
@@ -124,10 +152,10 @@ def causalmorph_v2(
             rec["skipped"] = "constant_parent"; continue
         try:
             P_scaled = StandardScaler().fit_transform(P)
-            y_lin = taylor_linearize(P_scaled, y, max_degree=max_degree)
+            y_lin, y_poly = _linearise(P_scaled, y, max_degree)
         except Exception as exc:                             # noqa: BLE001 — v1 behaviour
             rec["skipped"] = f"stage1:{type(exc).__name__}"; continue
-        eps = y - y_lin
+        eps = y - (y_poly if stage1 == "poly" else y_lin)
         sd_eps = eps.std()
         rec["residual_before"] = eps.copy()
         if sd_eps < _EPS_VAR:
