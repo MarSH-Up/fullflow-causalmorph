@@ -214,21 +214,23 @@ def main():
     L = [r"\begin{tabular}{l" + "c" * 4 + "}", r"\toprule", "Configuration & " + " & ".join(CELL_TEX[c] for c in CELLS) + r" \\", r"\midrule"]
     steps = [("main600", "\\method{} (600 held-out)"), ("nostage0", "without Stage 0 (CausalMorph v2 + DirectLiNGAM), same windows"),
              ("oracle_seg", "with the true change points"), ("no_seg", "without segmentation"), ("L1000", "$L = 1{,}000$"), ("L2000", "$L = 2{,}000$"), ("L2500", "$L = 2{,}500$")]
+    D = [r"\begin{tabular}{l" + "c" * 4 + "}", r"\toprule", "Configuration & " + " & ".join(CELL_TEX[c] for c in CELLS) + r" \\", r"\midrule"]
     for step, lab in steps:
-        cells = []; abl[step] = {}
+        cells = []; diffs = []; abl[step] = {}
         for c in CELLS:
             d = load(c, step); ref = load(c, "main600")
             if d is None:
-                cells.append("--"); continue
-            v = ms(d.mean_norm_shd)
-            st = paired_stats(ref.mean_norm_shd, d.mean_norm_shd) if step != "main600" else None
+                cells.append("--"); diffs.append("--"); continue
+            cells.append(ms(d.mean_norm_shd))
+            st = paired_stats(ref.mean_norm_shd, d.mean_norm_shd) if step != "main600" else None   # method - configuration
             abl[step][c] = {"mean": float(d.mean_norm_shd.mean()), "sd": float(d.mean_norm_shd.std(ddof=1)), "skel": float(d.mean_skeleton_f1.mean()), "stats": st}
-            if st:
-                v += f" & ${-st['mean']:+.3f}$ [{-st['hi']:+.3f}, {-st['lo']:+.3f}]"
-            cells.append(v)
+            diffs.append(f"${-st['mean']:+.3f}$ [{-st['hi']:+.3f}, {-st['lo']:+.3f}]" if st else "--")   # configuration - method
         L.append(lab + " & " + " & ".join(cells) + r" \\")
-    L += [r"\bottomrule", r"\end{tabular}"]
+        if step != "main600":
+            D.append(lab + " & " + " & ".join(diffs) + r" \\")
+    L += [r"\bottomrule", r"\end{tabular}"]; D += [r"\bottomrule", r"\end{tabular}"]
     open(os.path.join(a.tex_dir, "tab_ablation_rows.tex"), "w").write("\n".join(L) + "\n")
+    open(os.path.join(a.tex_dir, "tab_ablation_diff_rows.tex"), "w").write("\n".join(D) + "\n")
     numbers["ablation"] = abl
 
     # ── detection (600) ──
