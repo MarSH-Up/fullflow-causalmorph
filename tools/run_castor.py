@@ -19,6 +19,7 @@ import argparse
 import contextlib
 import io
 import os
+import signal
 import sys
 import time
 import traceback
@@ -35,6 +36,14 @@ for path in (ROOT, os.path.join(ROOT, "NSD_Wavelets", "src"), os.path.join(ROOT,
         sys.path.insert(0, path)
 
 DEFAULTS = dict(window=500, w_threshold=0.4, max_it=5, loss_thres=1.0, zeta=100)   # the tutorial's settings, window = the detector's bound L
+
+
+class CastorTimeout(Exception):
+    pass
+
+
+def _alarm(signum, frame):
+    raise CastorTimeout()
 
 
 def castor_fit(X: np.ndarray, window: int, w_threshold: float, max_it: int, loss_thres: float, zeta: int):
@@ -88,7 +97,7 @@ def score(labels, graphs, names, true_cps, true_adjs, T):
     }
 
 
-def _job(sid, index_row, dataset_dir, cfg, permute_variables):
+def _job(sid, index_row, dataset_dir, cfg, permute_variables, timeout=0):
     import warnings as _w
     _w.filterwarnings("ignore")
     from run_experiments import load_scenario
@@ -97,8 +106,16 @@ def _job(sid, index_row, dataset_dir, cfg, permute_variables):
     t0 = time.time()
     try:
         X, names, true_cps, true_adjs, _, _ = load_scenario(sid, dataset_dir, index_row, permute_variables=permute_variables)
-        labels, graphs = castor_fit(X, **cfg)
+        if timeout:
+            signal.signal(signal.SIGALRM, _alarm); signal.alarm(int(timeout))
+        try:
+            labels, graphs = castor_fit(X, **cfg)
+        finally:
+            if timeout:
+                signal.alarm(0)
         row = {**meta, **score(labels, graphs, names, true_cps, true_adjs, len(X)), "status": "ok"}
+    except CastorTimeout:
+        row = {**meta, "status": "timeout", "error_msg": f"CASTOR did not finish within {timeout} s (T={len(X)}, p={meta['p']})"}
     except Exception:  # noqa: BLE001 — recorded per scenario, the run continues
         row = {**meta, "status": "error", "error_msg": traceback.format_exc(limit=3).strip()}
     row["seconds"] = round(time.time() - t0, 1)
@@ -115,6 +132,7 @@ def main():
     ap.add_argument("--batch_size", type=int, default=16)
     ap.add_argument("--resume", action="store_true")
     ap.add_argument("--permute_variables", action="store_true")
+    ap.add_argument("--timeout", type=int, default=0, help="seconds per scenario; a scenario that exceeds it is recorded with status 'timeout' (0 = none)")
     a = ap.parse_args()
     cfg = {k: getattr(a, k) for k in DEFAULTS}
 
@@ -127,7 +145,7 @@ def main():
     if a.resume and os.path.exists(out):
         prev = pd.read_csv(out, dtype=str)
         index = index[~index.scenario_id.isin(set(prev.scenario_id))]
-    print(f"CASTOR  {cfg}  scenarios to run: {len(index)}  workers={a.workers}", flush=True)
+    print(f"CASTOR  {cfg}  timeout={a.timeout or 'none'}  scenarios to run: {len(index)}  workers={a.workers}", flush=True)
 
     t0, done, header = time.time(), 0, not os.path.exists(out)
     columns = None if header else list(pd.read_csv(out, nrows=0).columns)
@@ -145,7 +163,7 @@ def main():
 
     buf = []
     with ProcessPoolExecutor(max_workers=a.workers) as ex:
-        futs = [ex.submit(_job, r.scenario_id, r, a.dataset_dir, cfg, a.permute_variables) for _, r in rows]
+        futs = [ex.submit(_job, r.scenario_id, r, a.dataset_dir, cfg, a.permute_variables, a.timeout) for _, r in rows]
         for f in as_completed(futs):
             buf.append(f.result()); done += 1
             if len(buf) >= a.batch_size:

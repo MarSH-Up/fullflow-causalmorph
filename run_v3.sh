@@ -51,6 +51,7 @@ DET="${DET:-union}"
 MAIN_N="${MAIN_N:-3000}"
 LOCAL_IDS="${LOCAL_IDS:-results/robustness/grid_ids.txt}"   # scenarios used to fix Stage 0's thresholds locally: excluded from main
 CASTOR_STEP="${CASTOR_STEP:-4}"   # CASTOR runs on every CASTOR_STEP-th held-out id (1 = all 600)
+CASTOR_TIMEOUT="${CASTOR_TIMEOUT:-1800}"   # seconds per scenario; longer runs are recorded as 'timeout' (its cost is ~quadratic in T)
 IDS="$REF/kci_ids.txt"
 [ -f "$IDS" ] || { echo "missing $IDS" >&2; exit 1; }
 LOG="$OUT/logs"; mkdir -p "$LOG"
@@ -127,10 +128,10 @@ for step in $STEPS; do
     echo "   CASTOR at $(git -C third_party/CASTOR rev-parse --short HEAD)" | tee -a "$OUT/RUN_INFO.txt"
     for c in $CELLS; do
       run "$c/castor" "$OUT/$c/castor" "$(want_for castor "$c")" "$PYTHON" -u tools/run_castor.py --dataset_dir "$(dataset_for "$c")" --output_dir "$OUT/$c/castor" \
-          --scenario_ids_file "$CASTOR_IDS" --window "$FIXED_L" --permute_variables --workers "$WORKERS" --resume
+          --scenario_ids_file "$CASTOR_IDS" --window "$FIXED_L" --timeout "$CASTOR_TIMEOUT" --permute_variables --workers "$WORKERS" --resume
     done
     run "external/castor" "$OUT/external/castor" "$(want_for castor external)" "$PYTHON" -u tools/run_castor.py --dataset_dir "$EXT" --output_dir "$OUT/external/castor" \
-        --window "$FIXED_L" --permute_variables --workers "$WORKERS" --resume
+        --window "$FIXED_L" --timeout "$CASTOR_TIMEOUT" --permute_variables --workers "$WORKERS" --resume
     continue
   fi
   for c in $CELLS; do
