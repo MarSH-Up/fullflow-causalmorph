@@ -49,6 +49,11 @@ def rows_for(cell, main_step="main"):
     rows["CD-NOD Fisher-z"] = (col(cd, "mean_norm_shd"), col(cd, "mean_skeleton_f1"))
     rows["CD-NOD vs union graph"] = (col(cd, "union_norm_shd"), col(cd, "union_skeleton_f1"))
     rows["CASTOR (linear EM)"] = (col(cas, "mean_norm_shd"), col(cas, "mean_skeleton_f1"))
+    if cas is not None and m is not None:
+        # CASTOR runs on a subsample whose graph density may differ: the method and the empty graph on its ids
+        ids = m.index.intersection(cas.index)
+        rows["Method, CASTOR's ids"] = (m.mean_norm_shd.reindex(ids), m.mean_skeleton_f1.reindex(ids))
+        rows["Empty graph, CASTOR's ids"] = (col(m, "empty_mean_norm_shd").reindex(ids) if "empty_mean_norm_shd" in m else None, None)
     return rows, col(m, "mean_norm_shd")
 
 
