@@ -27,6 +27,8 @@ CELL_TEX = {"lin_laplace": r"\makecell{linear\\Laplace}", "nonlin_laplace": r"\m
             "lin_normal": r"\makecell{linear\\Gaussian}", "nonlin_normal": r"\makecell{cubic\\Gaussian}",
             "external/exp": r"\makecell{ext.\\exponential}", "external/gumbel": r"\makecell{ext.\\Gumbel}", "external/gauss": r"\makecell{ext.\\Gaussian}"}
 METHOD = r"\method{}"
+CELL_ROW = {"lin_laplace": "linear / Laplace", "nonlin_laplace": "cubic / Laplace", "lin_normal": "linear / Gaussian", "nonlin_normal": "cubic / Gaussian",
+            "external/exp": "external / exponential", "external/gumbel": "external / Gumbel", "external/gauss": "external / Gaussian"}
 
 
 def load(*p):
@@ -204,7 +206,7 @@ def main():
                 continue
             ptxt = "$<0.001$" if st["p"] < 0.001 else f"{st['p']:.3f}"
             ptxt += " (" + ("$<0.001$" if st["p_holm"] < 0.001 else f"{st['p_holm']:.3f}") + ")"
-            L.append(f"{CELL_TEX[c]} & {LABELS[k]} & {st['n']} & ${st['mean']:+.3f}$ [{st['lo']:+.3f}, {st['hi']:+.3f}] & ${st['hl']:+.3f}$ & "
+            L.append(f"{CELL_ROW[c]} & {LABELS[k]} & {st['n']} & ${st['mean']:+.3f}$ [{st['lo']:+.3f}, {st['hi']:+.3f}] & ${st['hl']:+.3f}$ & "
                      f"{st['w_plus']:.3g} / {st['w_minus']:.3g} & {ptxt} & ${st['rb']:+.2f}$ & {st['lower']} / {st['higher']} \\\\")
     L += [r"\bottomrule", r"\end{tabular}"]
     open(os.path.join(a.tex_dir, "tab_stats_rows.tex"), "w").write("\n".join(L) + "\n")
@@ -252,11 +254,25 @@ def main():
             det[c][step] = dict(micro_f1=F, precision=P, recall=Rc, macro_f1=mf, macro_lo=mlo, macro_hi=mhi, conf_f1=cF, windows_per_regime=wr, nshd=float(d.mean_norm_shd.mean()))
             if step == "oracle_seg":
                 continue
-            L.append(f"{CELL_TEX[c]} & {lab} & {F:.3f} & {P:.2f} & {Rc:.2f} & {mf:.3f} [{mlo:.3f}, {mhi:.3f}] & {cF:.3f} & {wr:.2f} & {d.mean_norm_shd.mean():.3f} \\\\")
+            L.append(f"{CELL_ROW[c]} & {lab} & {F:.3f} & {P:.2f} & {Rc:.2f} & {mf:.3f} [{mlo:.3f}, {mhi:.3f}] & {cF:.3f} & {wr:.2f} & {d.mean_norm_shd.mean():.3f} \\\\")
         L.append(r"\midrule")
     L = L[:-1] + [r"\bottomrule", r"\end{tabular}"]
     open(os.path.join(a.tex_dir, "tab_detection_rows.tex"), "w").write("\n".join(L) + "\n")
     numbers["detection"] = det
+    # compact version for the main text: macro F1 (precision / recall) and nSHD per cell
+    M = [r"\begin{tabular}{l" + "c" * 4 + "}", r"\toprule", "Segmentation & " + " & ".join(CELL_TEX[c] for c in CELLS) + r" \\", r"\midrule"]
+    for step, lab in dsteps:
+        if step == "oracle_seg":
+            continue
+        cells = []
+        for c in CELLS:
+            r = det[c].get(step)
+            cells.append(f"{r['macro_f1']:.3f} / {r['nshd']:.3f}" if r else "--")
+        M.append(lab + " & " + " & ".join(cells) + r" \\")
+    cells = [f"-- / {det[c]['oracle_seg']['nshd']:.3f}" if det[c].get("oracle_seg") else "--" for c in CELLS]
+    M.append("true change points & " + " & ".join(cells) + r" \\")
+    M += [r"\bottomrule", r"\end{tabular}"]
+    open(os.path.join(a.tex_dir, "tab_detection_main.tex"), "w").write("\n".join(M) + "\n")
 
     # ── routing shares, transform failures ──
     routing = {}
@@ -278,7 +294,7 @@ def main():
     L = [r"\begin{tabular}{lrrrr}", r"\toprule", r"Cell & windows & LiNGAM path & Stage 0 (ANM) & CPDAG \\", r"\midrule"]
     for c in cols:
         r = routing[c]
-        L.append(f"{CELL_TEX[c]} & {r['windows']:,} & {100 * r['lingam']:.0f}\\% & {100 * r['stage0']:.0f}\\% & {100 * r['pc']:.0f}\\% \\\\")
+        L.append(f"{CELL_ROW[c]} & {r['windows']:,} & {100 * r['lingam']:.0f}\\% & {100 * r['stage0']:.0f}\\% & {100 * r['pc']:.0f}\\% \\\\")
     L += [r"\bottomrule", r"\end{tabular}"]
     open(os.path.join(a.tex_dir, "tab_routing_rows.tex"), "w").write("\n".join(L) + "\n")
 
