@@ -27,6 +27,7 @@ CELL_TEX = {"lin_laplace": r"\makecell{linear\\Laplace}", "nonlin_laplace": r"\m
             "lin_normal": r"\makecell{linear\\Gaussian}", "nonlin_normal": r"\makecell{cubic\\Gaussian}",
             "external/exp": r"\makecell{ext.\\exponential}", "external/gumbel": r"\makecell{ext.\\Gumbel}", "external/gauss": r"\makecell{ext.\\Gaussian}"}
 METHOD = r"\method{}"
+MAIN_LABELS = {"dagma": "DAGMA (tuned)", "cdnod": "CD-NOD (Fisher-z)", "castor": "CASTOR (150 per cell)", "pc": "PC"}
 CELL_ROW = {"lin_laplace": "linear / Laplace", "nonlin_laplace": "cubic / Laplace", "lin_normal": "linear / Gaussian", "nonlin_normal": "cubic / Gaussian",
             "external/exp": "external / exponential", "external/gumbel": "external / Gumbel", "external/gauss": "external / Gaussian"}
 
@@ -178,7 +179,7 @@ def main():
             v = ms(s); best = all((columns[c][0][o][0] is None or not len(columns[c][0][o][0].dropna()) or columns[c][0][o][0].mean() >= s.mean()) for o in main_rows if o != k and o != "castor") and k != "castor"
             cells.append((r"\textbf{" + v + "}") if best else v)
             numbers["table1"].setdefault(k, {})[c] = {"mean": float(s.mean()), "sd": float(s.std(ddof=1)), "median": float(s.median()), "n": int(len(s.dropna()))}
-        L.append(LABELS[k] + " & " + " & ".join(cells) + r" \\")
+        L.append(MAIN_LABELS.get(k, LABELS[k]) + " & " + " & ".join(cells) + r" \\")
     L += [r"\bottomrule", r"\end{tabular}"]
     open(os.path.join(a.tex_dir, "tab_main_rows.tex"), "w").write("\n".join(L) + "\n")
 
