@@ -91,7 +91,7 @@ want_for () {
 : > "$OUT/PLAN.tsv"   # read by tools/run_status.py
 for step in $STEPS; do
   case "$step" in
-    external) printf '%s\t%s\t%s\n' "$step" external "$(want_for external x)" >> "$OUT/PLAN.tsv" ;;
+    external) printf '%s\t%s\t%s\n' main external "$(want_for external x)" >> "$OUT/PLAN.tsv" ;;   # results live in $OUT/external/main
     castor)   for c in $CELLS external; do printf '%s\t%s\t%s\n' "$step" "$c" "$(want_for castor "$c")" >> "$OUT/PLAN.tsv"; done ;;
     *)        for c in $CELLS; do printf '%s\t%s\t%s\n' "$step" "$c" "$(want_for "$step" "$c")" >> "$OUT/PLAN.tsv"; done ;;
   esac
