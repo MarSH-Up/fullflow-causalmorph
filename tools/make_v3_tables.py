@@ -219,6 +219,8 @@ def main():
              ("oracle_seg", "with the true change points"), ("no_seg", "without segmentation"), ("L1000", "$L = 1{,}000$"), ("L2000", "$L = 2{,}000$"), ("L2500", "$L = 2{,}500$")]
     D = [r"\begin{tabular}{l" + "c" * 4 + "}", r"\toprule", "Configuration & " + " & ".join(CELL_TEX[c] for c in CELLS) + r" \\", r"\midrule"]
     for step, lab in steps:
+        if all(load(c, step) is None for c in CELLS):
+            continue
         cells = []; diffs = []; abl[step] = {}
         for c in CELLS:
             d = load(c, step); ref = load(c, "main600")
