@@ -9,6 +9,9 @@
 #                 -> $OUT/external/dagma_tuned
 #   L_large       the method with L = 2000 and L = 2500 on the 600 held-out ids (where a bound above the
 #                 true shortest regime breaks the segmentation)  -> $OUT/<cell>/L2000, L2500
+#   stage0_sens   Stage 0 thresholds moved around the chosen (0.05, 0.5) on the 600 held-out ids, on the
+#                 segmentation of main600 (only the per-window stage reruns): (kappa0, g0) in
+#                 {(0.02,0.5), (0.10,0.5), (0.05,0.4), (0.05,0.67)}   -> $OUT/<cell>/sens_k<kappa0>_g<g0>
 #   castor        what run_v3.sh's castor step has not finished (Gaussian cells, external): waits until no
 #                 run_castor.py of this user is running, then resumes every cell and the external benchmark
 #                 with the same ids, window and time-out        -> $OUT/<cell>/castor, $OUT/external/castor
@@ -27,6 +30,7 @@ EXTRAS="${EXTRAS:-results/review_extras}"
 EXT="${EXT:-datasets_dagma_v2}"
 CELLS="${CELLS:-lin_laplace nonlin_laplace lin_normal nonlin_normal}"
 STEPS="${STEPS:-diagnostics dagma_ext L_large castor}"
+SENS="${SENS:-0.02,0.5 0.10,0.5 0.05,0.4 0.05,0.67}"
 DATA_PREFIX="${DATA_PREFIX:-datasets_full_}"
 DET="${DET:-union}"
 FIXED_L="${FIXED_L:-500}"
@@ -53,6 +57,7 @@ for step in $STEPS; do
     diagnostics) for c in $CELLS; do plan diagnostics "$c" "$n_main"; done; plan diagnostics external "$n_ext" ;;
     dagma_ext)   plan dagma_tuned external "$n_ext" ;;
     L_large)     for L in 2000 2500; do for c in $CELLS; do plan "L$L" "$c" "$n_held"; done; done ;;
+    stage0_sens) for kg in $SENS; do for c in $CELLS; do plan "sens_k${kg%,*}_g${kg#*,}" "$c" "$n_held"; done; done ;;
     castor)      [ -f "$CASTOR_IDS" ] || { echo "missing $CASTOR_IDS" >&2; exit 1; }
                  for c in $CELLS; do plan castor "$c" "$(grep -c . "$CASTOR_IDS")"; done; plan castor external "$n_ext" ;;
     *) echo "unknown step '$step'" >&2; exit 1 ;;
@@ -87,6 +92,12 @@ for step in $STEPS; do
       for L in 2000 2500; do for c in $CELLS; do
         run "$c/L$L" "$OUT/$c/L$L" "$n_held" "$PYTHON" -u run_experiments.py --dataset_dir "$(dataset_for "$c")" --output_dir "$OUT/$c/L$L" "${COMMON[@]}" "${METHOD[@]}" \
             --detector "$DET" --cut_filter rank --fixed_min_regime_len "$L" --no_ablation --scenario_ids_file "$IDS" --batch_size 64
+      done; done ;;
+    stage0_sens)
+      for kg in $SENS; do k0="${kg%,*}"; g0="${kg#*,}"; for c in $CELLS; do
+        run "$c/sens_k${k0}_g${g0}" "$OUT/$c/sens_k${k0}_g${g0}" "$n_held" "$PYTHON" -u run_experiments.py --dataset_dir "$(dataset_for "$c")" --output_dir "$OUT/$c/sens_k${k0}_g${g0}" \
+            "${COMMON[@]}" --stage0 auto --stage0_output stage0 --curvature_threshold "$k0" --stage0_threshold "$g0" \
+            --cps_from "$OUT/$c/main600/results.csv" --no_ablation --scenario_ids_file "$IDS" --batch_size 64
       done; done ;;
     castor)
       while pgrep -u "$(whoami)" -f "run_castor.py" > /dev/null; do

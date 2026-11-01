@@ -27,7 +27,7 @@ CELL_TEX = {"lin_laplace": r"\makecell{linear\\Laplace}", "nonlin_laplace": r"\m
             "lin_normal": r"\makecell{linear\\Gaussian}", "nonlin_normal": r"\makecell{cubic\\Gaussian}",
             "external/exp": r"\makecell{ext.\\exponential}", "external/gumbel": r"\makecell{ext.\\Gumbel}", "external/gauss": r"\makecell{ext.\\Gaussian}"}
 METHOD = r"\method{}"
-MAIN_LABELS = {"dagma": "DAGMA (tuned)", "cdnod": "CD-NOD (Fisher-z)", "castor": "CASTOR (subsample)", "pc": "PC"}
+MAIN_LABELS = {"dagma": "DAGMA (tuned)", "cdnod": "CD-NOD (Fisher-z)", "castor": "CASTOR (subsample)", "pc": "PC", "directlingam": "DirectLiNGAM alone"}
 CELL_ROW = {"lin_laplace": "linear / Laplace", "nonlin_laplace": "cubic / Laplace", "lin_normal": "linear / Gaussian", "nonlin_normal": "cubic / Gaussian",
             "external/exp": "external / exponential", "external/gumbel": "external / Gumbel", "external/gauss": "external / Gaussian"}
 
@@ -167,7 +167,7 @@ def main():
     numbers["paired"] = stats
 
     # ── Table 1: mean (SD) nSHD, main rows ──
-    main_rows = ["method", "dagma", "cdnod", "castor", "pc"]
+    main_rows = ["method", "dagma", "cdnod", "castor", "pc", "directlingam"]
     L = [r"\begin{tabular}{l" + "c" * len(cols) + "}", r"\toprule", "Method & " + " & ".join(CELL_TEX[c] for c in cols) + r" \\", r"\midrule"]
     numbers["table1"] = {}
     for k in main_rows:
@@ -184,7 +184,7 @@ def main():
     open(os.path.join(a.tex_dir, "tab_main_rows.tex"), "w").write("\n".join(L) + "\n")
 
     # ── skeleton F1 (appendix) and extra learners (appendix) ──
-    for name, keys, which in (("tab_skeleton_rows.tex", main_rows + ["directlingam", "cdnod_union"], 1),
+    for name, keys, which in (("tab_skeleton_rows.tex", main_rows + ["cdnod_union"], 1),
                               ("tab_learners_rows.tex", ["method", "directlingam", "icalingam", "dagma_paper", "sortnregress", "randomregress", "single_oracle", "cdnod_union"], 0)):
         L = [r"\begin{tabular}{l" + "c" * len(cols) + "}", r"\toprule", "Method & " + " & ".join(CELL_TEX[c] for c in cols) + r" \\", r"\midrule"]
         for k in keys:
@@ -208,7 +208,7 @@ def main():
             open(os.path.join(a.tex_dir, "tab_stats_rows.tex"), "w").write("\n".join(L) + "\n")
             L = L_ext
         for k, st in stats[c].items():
-            if not st or k not in main_rows + ["directlingam", "single_oracle"]:
+            if not st or k not in main_rows + ["single_oracle"]:
                 continue
             ptxt = "$<0.001$" if st["p"] < 0.001 else f"{st['p']:.3f}"
             ptxt += " (" + ("$<0.001$" if st["p_holm"] < 0.001 else f"{st['p_holm']:.3f}") + ")"
