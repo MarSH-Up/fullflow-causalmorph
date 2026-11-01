@@ -221,14 +221,17 @@ def main():
     abl = {}
     L = [r"\begin{tabular}{l" + "c" * 4 + "}", r"\toprule", "Configuration & " + " & ".join(CELL_TEX[c] for c in CELLS) + r" \\", r"\midrule"]
     steps = [("main600", "\\method{} (600 held-out)"), ("nostage0", "without Stage 0 (preconditioner + DirectLiNGAM), same windows"),
+             ("dl600", "without Stage 0 and without preconditioning (DirectLiNGAM alone), same windows"),
              ("oracle_seg", "with the true change points"), ("no_seg", "without segmentation"), ("L1000", "$L = 1{,}000$"), ("L2000", "$L = 2{,}000$"), ("L2500", "$L = 2{,}500$")]
     D = [r"\begin{tabular}{l" + "c" * 4 + "}", r"\toprule", "Configuration & " + " & ".join(CELL_TEX[c] for c in CELLS) + r" \\", r"\midrule"]
     for step, lab in steps:
-        if all(load(c, step) is None for c in CELLS):
+        if all(load(c, "main600" if step == "dl600" else step) is None for c in CELLS):
             continue
         cells = []; diffs = []; abl[step] = {}
         for c in CELLS:
-            d = load(c, step); ref = load(c, "main600")
+            d = load(c, "main600" if step == "dl600" else step); ref = load(c, "main600")
+            if step == "dl600" and d is not None:   # the learner alone on the windows of main600 (its ablation columns)
+                d = d.assign(mean_norm_shd=d.directlingam_mean_norm_shd, mean_skeleton_f1=d.directlingam_mean_skeleton_f1)
             if d is None:
                 cells.append("--"); diffs.append("--"); continue
             cells.append(ms(d.mean_norm_shd))
