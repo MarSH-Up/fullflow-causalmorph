@@ -346,7 +346,7 @@ def main():
                   "timeouts": int((pd.read_csv(R(c, "castor", "results.csv")).status == "timeout").sum())}
     numbers["castor"] = cas
     L = [r"\begin{tabular}{lrrcccccr}", r"\toprule",
-         r"Cell & $n$ & time-outs & CASTOR $\nshd$ & \method{} $\nshd$ & diff.\ [95\% CI] & CASTOR skeleton F1 & regimes found / true & change-point F1 \\", r"\midrule"]
+         r"Cell & $n$ & t/o & CASTOR & \\method{} & diff.\\ [95\\% CI] & skel.\\ F1 & regimes & cp F1 \\\\", r"\midrule"]
     for c in CELLS + ["external"]:
         if c not in cas:
             continue
