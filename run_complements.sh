@@ -12,6 +12,10 @@
 #   stage0_sens   Stage 0 thresholds moved around the chosen (0.05, 0.5) on the 600 held-out ids, on the
 #                 segmentation of main600 (only the per-window stage reruns): (kappa0, g0) in
 #                 {(0.02,0.5), (0.10,0.5), (0.05,0.4), (0.05,0.67)}   -> $OUT/<cell>/sens_k<kappa0>_g<g0>
+#   tanh          two cells with curvature at the signal scale (tanh of the unit-scaled parent sum, Laplace and
+#                 Gaussian noise) on the 600 held-out ids: datasets generated on the fly, then the method with its
+#                 reference learners (main600), without Stage 0, CD-NOD (Fisher-z) and DAGMA tuned
+#                 -> $OUT/tanh_laplace/{main600,nostage0,cdnod_fz,dagma_tuned}, same for tanh_normal
 #   castor        what run_v3.sh's castor step has not finished (Gaussian cells, external): waits until no
 #                 run_castor.py of this user is running, then resumes every cell and the external benchmark
 #                 with the same ids, window and time-out        -> $OUT/<cell>/castor, $OUT/external/castor
@@ -31,6 +35,11 @@ EXT="${EXT:-datasets_dagma_v2}"
 CELLS="${CELLS:-lin_laplace nonlin_laplace lin_normal nonlin_normal}"
 STEPS="${STEPS:-diagnostics dagma_ext L_large castor}"
 SENS="${SENS:-0.02,0.5 0.10,0.5 0.05,0.4 0.05,0.67}"
+TANH_CELLS="${TANH_CELLS:-tanh_laplace tanh_normal}"
+LEARNERS="directlingam,icalingam,dagma_paper,sortnregress,randomregress,empty,pc"
+SEG=(--detector "$DET" --cut_filter rank --fixed_min_regime_len "$FIXED_L")
+tanh_flags () { case "$1" in tanh_laplace) echo "--mechanism nonlinear --nonlinearity 0.7 --nonlin_func tanh_unit --noise_dist laplace" ;;
+                              tanh_normal)  echo "--mechanism nonlinear --nonlinearity 0.7 --nonlin_func tanh_unit --noise_dist normal" ;; esac; }
 DATA_PREFIX="${DATA_PREFIX:-datasets_full_}"
 DET="${DET:-union}"
 FIXED_L="${FIXED_L:-500}"
@@ -58,6 +67,7 @@ for step in $STEPS; do
     dagma_ext)   plan dagma_tuned external "$n_ext" ;;
     L_large)     for L in 2000 2500; do for c in $CELLS; do plan "L$L" "$c" "$n_held"; done; done ;;
     stage0_sens) for kg in $SENS; do for c in $CELLS; do plan "sens_k${kg%,*}_g${kg#*,}" "$c" "$n_held"; done; done ;;
+    tanh)        for c in $TANH_CELLS; do for st in main600 nostage0 cdnod_fz dagma_tuned; do plan "$st" "$c" "$n_held"; done; done ;;
     castor)      [ -f "$CASTOR_IDS" ] || { echo "missing $CASTOR_IDS" >&2; exit 1; }
                  for c in $CELLS; do plan castor "$c" "$(grep -c . "$CASTOR_IDS")"; done; plan castor external "$n_ext" ;;
     *) echo "unknown step '$step'" >&2; exit 1 ;;
@@ -99,6 +109,22 @@ for step in $STEPS; do
             "${COMMON[@]}" --stage0 auto --stage0_output stage0 --curvature_threshold "$k0" --stage0_threshold "$g0" \
             --cps_from "$OUT/$c/main600/results.csv" --no_ablation --scenario_ids_file "$IDS" --batch_size 64
       done; done ;;
+    tanh)
+      choice="$(tail -1 "$EXTRAS/dagma_choice.txt")"
+      for c in $TANH_CELLS; do
+        ds="$(dataset_for "$c")"
+        if [ ! -f "$ds/index.csv" ]; then
+          echo "== generating $ds for $n_held ids  $(date '+%F %H:%M') =="
+          # shellcheck disable=SC2046
+          "$PYTHON" generate_datasets.py --output_dir "$ds" --only_ids "$IDS" $(tanh_flags "$c") > "$LOG/generate_$c.log" 2>&1
+        fi
+        base=("$PYTHON" -u run_experiments.py --dataset_dir "$ds" "${COMMON[@]}"); held=(--scenario_ids_file "$IDS" --batch_size 64)
+        run "$c/main600" "$OUT/$c/main600" "$n_held" "${base[@]}" --output_dir "$OUT/$c/main600" "${METHOD[@]}" "${SEG[@]}" --ablation_methods "$LEARNERS" "${held[@]}"
+        run "$c/nostage0" "$OUT/$c/nostage0" "$n_held" "${base[@]}" --output_dir "$OUT/$c/nostage0" --stage0 off --cps_from "$OUT/$c/main600/results.csv" --no_ablation "${held[@]}"
+        run "$c/dagma_tuned" "$OUT/$c/dagma_tuned" "$n_held" "${base[@]}" --output_dir "$OUT/$c/dagma_tuned" --cps_from "$OUT/$c/main600/results.csv" --ablation_methods "$choice" "${held[@]}"
+        run "$c/cdnod_fz" "$OUT/$c/cdnod_fz" "$n_held" "$PYTHON" -u tools/run_cdnod.py --dataset_dir "$ds" --output_dir "$OUT/$c/cdnod_fz" --test fisherz --n_sub 0 \
+            --scenario_ids_file "$IDS" --permute_variables --workers "$WORKERS" --resume
+      done ;;
     castor)
       while pgrep -u "$(whoami)" -f "run_castor.py" > /dev/null; do
         echo "   castor: run_castor.py of $(whoami) still running, waiting  $(date '+%F %H:%M')"; sleep 600
