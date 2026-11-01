@@ -199,8 +199,8 @@ def main():
         open(os.path.join(a.tex_dir, name), "w").write("\n".join(L) + "\n")
 
     # ── full statistics table (appendix): one block per column ──
-    HEAD = [r"\begin{tabular}{llrrrrrrr}", r"\toprule",
-            r"Cell & Row & $n$ & mean diff.\ [95\% CI] & HL & $W_+$ / $W_-$ & $P$ (Holm) & $r_{rb}$ & lower / higher \\", r"\midrule"]
+    HEAD = [r"\begin{tabular}{llrrrrr}", r"\toprule",
+            r"Cell & Row & $n$ & mean diff.\ [95\% CI] & $P$ (Holm) & $r_{rb}$ & lower / higher \\", r"\midrule"]
     L = list(HEAD); L_ext = list(HEAD)
     for c in cols:
         if c.startswith("external") and L is not L_ext:
@@ -212,8 +212,8 @@ def main():
                 continue
             ptxt = "$<0.001$" if st["p"] < 0.001 else f"{st['p']:.3f}"
             ptxt += " (" + ("$<0.001$" if st["p_holm"] < 0.001 else f"{st['p_holm']:.3f}") + ")"
-            L.append(f"{CELL_ROW[c]} & {LABELS[k]} & {st['n']} & ${st['mean']:+.3f}$ [{st['lo']:+.3f}, {st['hi']:+.3f}] & ${st['hl']:+.3f}$ & "
-                     f"{st['w_plus']:.3g} / {st['w_minus']:.3g} & {ptxt} & ${st['rb']:+.2f}$ & {st['lower']} / {st['higher']} \\\\")
+            L.append(f"{CELL_ROW[c]} & {LABELS[k]} & {st['n']} & ${st['mean']:+.3f}$ [{st['lo']:+.3f}, {st['hi']:+.3f}] & "
+                     f"{ptxt} & ${st['rb']:+.2f}$ & {st['lower']} / {st['higher']} \\\\")
     L += [r"\bottomrule", r"\end{tabular}"]
     open(os.path.join(a.tex_dir, "tab_stats_ext_rows.tex"), "w").write("\n".join(L) + "\n")
 
@@ -278,10 +278,8 @@ def main():
         cells = []
         for c in CELLS:
             r = det[c].get(step)
-            cells.append(f"{r['macro_f1']:.3f} / {r['nshd']:.3f}" if r else "--")
+            cells.append(f"{r['macro_f1']:.3f} [{r['macro_lo']:.3f}, {r['macro_hi']:.3f}]" if r else "--")
         M.append(lab + " & " + " & ".join(cells) + r" \\")
-    cells = [f"-- / {det[c]['oracle_seg']['nshd']:.3f}" if det[c].get("oracle_seg") else "--" for c in CELLS]
-    M.append("true change points & " + " & ".join(cells) + r" \\")
     M += [r"\bottomrule", r"\end{tabular}"]
     open(os.path.join(a.tex_dir, "tab_detection_main.tex"), "w").write("\n".join(M) + "\n")
 
@@ -322,13 +320,13 @@ def main():
         diag[c] = {k: {"mean": float(d[k].mean()), "sd": float(d[k].std(ddof=1))} for k in ("varsortability", "r2sortability", "cubic_r2_gain", "density", "nshd_empty", "nshd_single_oracle")}
         diag[c]["edge_flips"] = int(d.edge_flips.sum()); diag[c]["n"] = int(len(d))
     numbers["diagnostics"] = diag
-    L = [r"\begin{tabular}{lrccccc}", r"\toprule",
-         r"Cell & $n$ & varsortability & $R^2$-sortability & cubic $R^2$ gain & density & best single DAG $\nshd$ \\", r"\midrule"]
+    L = [r"\begin{tabular}{lccccc}", r"\toprule",
+         r"Cell & varsortability & $R^2$-sortability & cubic $R^2$ gain & density & best single DAG $\nshd$ \\", r"\midrule"]
     for c in cols:
         if c not in diag:
             continue
         r = diag[c]; f = lambda k: f"{r[k]['mean']:.3f} ({r[k]['sd']:.3f})"
-        L.append(f"{CELL_ROW[c]} & {r['n']:,} & {f('varsortability')} & {f('r2sortability')} & {f('cubic_r2_gain')} & {f('density')} & {f('nshd_single_oracle')} \\\\")
+        L.append(f"{CELL_ROW[c]} & {f('varsortability')} & {f('r2sortability')} & {f('cubic_r2_gain')} & {f('density')} & {f('nshd_single_oracle')} \\\\")
     L += [r"\bottomrule", r"\end{tabular}"]
     open(os.path.join(a.tex_dir, "tab_diagnostics_rows.tex"), "w").write("\n".join(L) + "\n")
 
@@ -345,8 +343,8 @@ def main():
                   "det_f1": f1_of(d.det_tp.reindex(ids).sum(), d.det_fp.reindex(ids).sum(), d.det_fn.reindex(ids).sum())[0],
                   "timeouts": int((pd.read_csv(R(c, "castor", "results.csv")).status == "timeout").sum())}
     numbers["castor"] = cas
-    L = [r"\begin{tabular}{lrrcccccr}", r"\toprule",
-         r"Cell & $n$ & t/o & CASTOR & \method{} & diff.\ [95\% CI] & skel.\ F1 & regimes & cp F1 \\", r"\midrule"]
+    L = [r"\begin{tabular}{lrrccccr}", r"\toprule",
+         r"Cell & $n$ & t/o & CASTOR & \method{} & diff.\ [95\% CI] & skel.\ F1 & cp F1 \\", r"\midrule"]
     for c in CELLS + ["external"]:
         if c not in cas:
             continue
@@ -356,7 +354,7 @@ def main():
             dtxt = ", ".join(f"${x['mean']:+.3f}$" for x in st)
         else:
             x = stats[c].get("castor"); dtxt = f"${x['mean']:+.3f}$ [{x['lo']:+.3f}, {x['hi']:+.3f}]" if x else "--"
-        L.append(f"{CELL_ROW.get(c, 'external (all)')} & {r['n']} & {r['timeouts']} & {r['castor']:.3f} & {r['method']:.3f} & {dtxt} & {r['castor_skel']:.2f} & {r['regimes_found_ratio']:.2f} & {r['det_f1']:.2f} \\\\")
+        L.append(f"{CELL_ROW.get(c, 'external (all)')} & {r['n']} & {r['timeouts']} & {r['castor']:.3f} & {r['method']:.3f} & {dtxt} & {r['castor_skel']:.2f} & {r['det_f1']:.2f} \\\\")
     L += [r"\bottomrule", r"\end{tabular}"]
     open(os.path.join(a.tex_dir, "tab_castor_rows.tex"), "w").write("\n".join(L) + "\n")
 
