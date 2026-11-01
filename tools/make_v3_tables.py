@@ -199,9 +199,14 @@ def main():
         open(os.path.join(a.tex_dir, name), "w").write("\n".join(L) + "\n")
 
     # ── full statistics table (appendix): one block per column ──
-    L = [r"\begin{tabular}{llrrrrrrr}", r"\toprule",
-         r"Cell & Row & $n$ & mean diff.\ [95\% CI] & HL & $W_+$ / $W_-$ & $P$ (Holm) & $r_{rb}$ & lower / higher \\", r"\midrule"]
+    HEAD = [r"\begin{tabular}{llrrrrrrr}", r"\toprule",
+            r"Cell & Row & $n$ & mean diff.\ [95\% CI] & HL & $W_+$ / $W_-$ & $P$ (Holm) & $r_{rb}$ & lower / higher \\", r"\midrule"]
+    L = list(HEAD); L_ext = list(HEAD)
     for c in cols:
+        if c.startswith("external") and L is not L_ext:
+            L += [r"\bottomrule", r"\end{tabular}"]
+            open(os.path.join(a.tex_dir, "tab_stats_rows.tex"), "w").write("\n".join(L) + "\n")
+            L = L_ext
         for k, st in stats[c].items():
             if not st or k not in main_rows + ["directlingam", "single_oracle"]:
                 continue
@@ -210,7 +215,7 @@ def main():
             L.append(f"{CELL_ROW[c]} & {LABELS[k]} & {st['n']} & ${st['mean']:+.3f}$ [{st['lo']:+.3f}, {st['hi']:+.3f}] & ${st['hl']:+.3f}$ & "
                      f"{st['w_plus']:.3g} / {st['w_minus']:.3g} & {ptxt} & ${st['rb']:+.2f}$ & {st['lower']} / {st['higher']} \\\\")
     L += [r"\bottomrule", r"\end{tabular}"]
-    open(os.path.join(a.tex_dir, "tab_stats_rows.tex"), "w").write("\n".join(L) + "\n")
+    open(os.path.join(a.tex_dir, "tab_stats_ext_rows.tex"), "w").write("\n".join(L) + "\n")
 
     # ── ablations (600) ──
     abl = {}
