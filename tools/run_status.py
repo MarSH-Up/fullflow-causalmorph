@@ -53,8 +53,10 @@ def prelim(path):
 def step_starts(log_path):
     """{(data, step): start datetime} from the runner's '== data/step  YYYY-MM-DD HH:MM ==' lines."""
     starts = {}
-    if os.path.exists(log_path):
-        for line in open(log_path):
+    for path in (log_path, log_path[:-len(".log")] + "_complements.log"):   # run_complements.sh logs apart
+        if not os.path.exists(path):
+            continue
+        for line in open(path):
             m = re.match(r"== (\w+)/(\w+)\s+(\d{4}-\d{2}-\d{2} \d{2}:\d{2})", line)
             if m:
                 starts.setdefault((m.group(1), m.group(2)), dt.datetime.strptime(m.group(3), "%Y-%m-%d %H:%M"))
