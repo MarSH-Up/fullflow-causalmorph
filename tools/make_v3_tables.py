@@ -110,7 +110,7 @@ def grid_rows(cell):
     rows["cdnod_union"] = (col(cd, "union_norm_shd"), col(cd, "union_skeleton_f1"))
     rows["pc"] = (col(m, "pc_mean_norm_shd"), col(m, "pc_mean_skeleton_f1"))
     rows["castor"] = (col(cas, "mean_norm_shd"), col(cas, "mean_skeleton_f1"))
-    for k in ("directlingam", "icalingam", "dagma_paper", "sortnregress", "randomregress", "empty"):
+    for k in ("directlingam", "icalingam", "dagma_paper", "sortnregress", "randomregress"):
         rows[k] = (col(m, f"{k}_mean_norm_shd"), col(m, f"{k}_mean_skeleton_f1"))
     rows["single_oracle"] = (col(diag, "nshd_single_oracle"), None)
     return rows, m
@@ -127,7 +127,7 @@ def external_rows():
     rows["cdnod_union"] = (col(cd, "union_norm_shd"), col(cd, "union_skeleton_f1"))
     rows["pc"] = (col(m, "pc_mean_norm_shd"), col(m, "pc_mean_skeleton_f1"))
     rows["castor"] = (col(cas, "mean_norm_shd"), col(cas, "mean_skeleton_f1"))
-    for k in ("directlingam", "icalingam", "dagma_paper", "sortnregress", "randomregress", "empty"):
+    for k in ("directlingam", "icalingam", "dagma_paper", "sortnregress", "randomregress"):
         rows[k] = (col(m, f"{k}_mean_norm_shd"), col(m, f"{k}_mean_skeleton_f1"))
     rows["single_oracle"] = (col(diag, "nshd_single_oracle"), None)
     info = open(R("RUN_INFO.txt")).read(); data = info.split("external: ")[1].split(" |")[0].strip()
@@ -185,7 +185,7 @@ def main():
 
     # ── skeleton F1 (appendix) and extra learners (appendix) ──
     for name, keys, which in (("tab_skeleton_rows.tex", main_rows + ["directlingam", "cdnod_union"], 1),
-                              ("tab_learners_rows.tex", ["method", "directlingam", "icalingam", "dagma_paper", "sortnregress", "randomregress", "empty", "single_oracle", "cdnod_union"], 0)):
+                              ("tab_learners_rows.tex", ["method", "directlingam", "icalingam", "dagma_paper", "sortnregress", "randomregress", "single_oracle", "cdnod_union"], 0)):
         L = [r"\begin{tabular}{l" + "c" * len(cols) + "}", r"\toprule", "Method & " + " & ".join(CELL_TEX[c] for c in cols) + r" \\", r"\midrule"]
         for k in keys:
             cells = []
@@ -203,7 +203,7 @@ def main():
          r"Cell & Row & $n$ & mean diff.\ [95\% CI] & HL & $W_+$ / $W_-$ & $P$ (Holm) & $r_{rb}$ & lower / higher \\", r"\midrule"]
     for c in cols:
         for k, st in stats[c].items():
-            if not st or k not in main_rows + ["directlingam", "empty", "single_oracle"]:
+            if not st or k not in main_rows + ["directlingam", "single_oracle"]:
                 continue
             ptxt = "$<0.001$" if st["p"] < 0.001 else f"{st['p']:.3f}"
             ptxt += " (" + ("$<0.001$" if st["p_holm"] < 0.001 else f"{st['p_holm']:.3f}") + ")"
@@ -323,7 +323,7 @@ def main():
             continue
         ids = m.index.intersection(d.index)
         cas[c] = {"n": int(len(ids)), "castor": float(d.mean_norm_shd.reindex(ids).mean()), "method": float(m.mean_norm_shd.reindex(ids).mean()),
-                  "empty": float(m.empty_mean_norm_shd.reindex(ids).mean()), "castor_skel": float(d.mean_skeleton_f1.reindex(ids).mean()),
+                  "castor_skel": float(d.mean_skeleton_f1.reindex(ids).mean()),
                   "regimes_found_ratio": float((d.n_regimes_found / d.n_regimes).reindex(ids).mean()),
                   "det_f1": f1_of(d.det_tp.reindex(ids).sum(), d.det_fp.reindex(ids).sum(), d.det_fn.reindex(ids).sum())[0],
                   "timeouts": int((pd.read_csv(R(c, "castor", "results.csv")).status == "timeout").sum())}
