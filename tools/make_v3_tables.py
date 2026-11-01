@@ -215,7 +215,7 @@ def main():
     # ── ablations (600) ──
     abl = {}
     L = [r"\begin{tabular}{l" + "c" * 4 + "}", r"\toprule", "Configuration & " + " & ".join(CELL_TEX[c] for c in CELLS) + r" \\", r"\midrule"]
-    steps = [("main600", "\\method{} (600 held-out)"), ("nostage0", "without Stage 0 (CausalMorph v2 + DirectLiNGAM), same windows"),
+    steps = [("main600", "\\method{} (600 held-out)"), ("nostage0", "without Stage 0 (preconditioner + DirectLiNGAM), same windows"),
              ("oracle_seg", "with the true change points"), ("no_seg", "without segmentation"), ("L1000", "$L = 1{,}000$"), ("L2000", "$L = 2{,}000$"), ("L2500", "$L = 2{,}500$")]
     D = [r"\begin{tabular}{l" + "c" * 4 + "}", r"\toprule", "Configuration & " + " & ".join(CELL_TEX[c] for c in CELLS) + r" \\", r"\midrule"]
     for step, lab in steps:
@@ -242,8 +242,8 @@ def main():
     det = {}
     L = [r"\begin{tabular}{llrrrrrrr}", r"\toprule",
          r"Cell & Segmentation & micro F1 & P & R & macro F1 [95\% CI] & conf.\ F1 & win./regime & $\nshd$ \\", r"\midrule"]
-    dsteps = [("det_v1O", "correlation detector (v1O)"), ("det_v1O_rank", "v1O + validation"), ("det_pelt", "PELT"), ("det_pelt_rank", "PELT + validation"),
-              ("main600", r"v1O $\cup$ PELT + validation (\method{})"), ("oracle_seg", "true change points")]
+    dsteps = [("det_v1O", "correlation detector"), ("det_v1O_rank", "correlation detector + validation"), ("det_pelt", "PELT"), ("det_pelt_rank", "PELT + validation"),
+              ("main600", r"union + validation (\method{})"), ("oracle_seg", "true change points")]
     for c in CELLS:
         det[c] = {}
         for step, lab in dsteps:
