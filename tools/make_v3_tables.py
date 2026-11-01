@@ -27,7 +27,7 @@ CELL_TEX = {"lin_laplace": r"\makecell{linear\\Laplace}", "nonlin_laplace": r"\m
             "lin_normal": r"\makecell{linear\\Gaussian}", "nonlin_normal": r"\makecell{cubic\\Gaussian}",
             "external/exp": r"\makecell{ext.\\exponential}", "external/gumbel": r"\makecell{ext.\\Gumbel}", "external/gauss": r"\makecell{ext.\\Gaussian}"}
 METHOD = r"\method{}"
-MAIN_LABELS = {"dagma": "DAGMA (tuned)", "cdnod": "CD-NOD (Fisher-z)", "castor": "CASTOR (150 per cell)", "pc": "PC"}
+MAIN_LABELS = {"dagma": "DAGMA (tuned)", "cdnod": "CD-NOD (Fisher-z)", "castor": "CASTOR (subsample)", "pc": "PC"}
 CELL_ROW = {"lin_laplace": "linear / Laplace", "nonlin_laplace": "cubic / Laplace", "lin_normal": "linear / Gaussian", "nonlin_normal": "cubic / Gaussian",
             "external/exp": "external / exponential", "external/gumbel": "external / Gumbel", "external/gauss": "external / Gaussian"}
 
@@ -322,6 +322,15 @@ def main():
         diag[c] = {k: {"mean": float(d[k].mean()), "sd": float(d[k].std(ddof=1))} for k in ("varsortability", "r2sortability", "cubic_r2_gain", "density", "nshd_empty", "nshd_single_oracle")}
         diag[c]["edge_flips"] = int(d.edge_flips.sum()); diag[c]["n"] = int(len(d))
     numbers["diagnostics"] = diag
+    L = [r"\begin{tabular}{lrccccc}", r"\toprule",
+         r"Cell & $n$ & varsortability & $R^2$-sortability & cubic $R^2$ gain & density & best single DAG $\nshd$ \\", r"\midrule"]
+    for c in cols:
+        if c not in diag:
+            continue
+        r = diag[c]; f = lambda k: f"{r[k]['mean']:.3f} ({r[k]['sd']:.3f})"
+        L.append(f"{CELL_ROW[c]} & {r['n']:,} & {f('varsortability')} & {f('r2sortability')} & {f('cubic_r2_gain')} & {f('density')} & {f('nshd_single_oracle')} \\\\")
+    L += [r"\bottomrule", r"\end{tabular}"]
+    open(os.path.join(a.tex_dir, "tab_diagnostics_rows.tex"), "w").write("\n".join(L) + "\n")
 
     # ── CASTOR on its ids ──
     cas = {}
@@ -336,6 +345,20 @@ def main():
                   "det_f1": f1_of(d.det_tp.reindex(ids).sum(), d.det_fp.reindex(ids).sum(), d.det_fn.reindex(ids).sum())[0],
                   "timeouts": int((pd.read_csv(R(c, "castor", "results.csv")).status == "timeout").sum())}
     numbers["castor"] = cas
+    L = [r"\begin{tabular}{lrrcccccr}", r"\toprule",
+         r"Cell & $n$ & time-outs & CASTOR $\nshd$ & \method{} $\nshd$ & diff.\ [95\% CI] & CASTOR skeleton F1 & regimes found / true & change-point F1 \\", r"\midrule"]
+    for c in CELLS + ["external"]:
+        if c not in cas:
+            continue
+        r = cas[c]
+        if c == "external":
+            st = [stats[k]["castor"] for k in cols if k.startswith("external") and stats[k].get("castor")]
+            dtxt = ", ".join(f"${x['mean']:+.3f}$" for x in st)
+        else:
+            x = stats[c].get("castor"); dtxt = f"${x['mean']:+.3f}$ [{x['lo']:+.3f}, {x['hi']:+.3f}]" if x else "--"
+        L.append(f"{CELL_ROW.get(c, 'external (all)')} & {r['n']} & {r['timeouts']} & {r['castor']:.3f} & {r['method']:.3f} & {dtxt} & {r['castor_skel']:.2f} & {r['regimes_found_ratio']:.2f} & {r['det_f1']:.2f} \\\\")
+    L += [r"\bottomrule", r"\end{tabular}"]
+    open(os.path.join(a.tex_dir, "tab_castor_rows.tex"), "w").write("\n".join(L) + "\n")
 
     json.dump(numbers, open(os.path.join(a.tex_dir, "numbers.json"), "w"), indent=1, default=float)
     print("tables written to", a.tex_dir)
