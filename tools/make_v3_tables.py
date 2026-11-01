@@ -273,7 +273,7 @@ def main():
     # compact version for the main text: macro F1 (precision / recall) and nSHD per cell
     M = [r"\begin{tabular}{l" + "c" * 4 + "}", r"\toprule", "Segmentation & " + " & ".join(CELL_TEX[c] for c in CELLS) + r" \\", r"\midrule"]
     for step, lab in dsteps:
-        if step == "oracle_seg":
+        if step in ("oracle_seg", "det_v1O_rank", "det_pelt"):   # the full table (appendix) keeps every configuration
             continue
         cells = []
         for c in CELLS:
