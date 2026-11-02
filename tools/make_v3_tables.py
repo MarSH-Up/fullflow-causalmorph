@@ -167,7 +167,7 @@ def main():
     numbers["paired"] = stats
 
     # ── Table 1: mean (SD) nSHD, main rows ──
-    main_rows = ["method", "dagma", "cdnod", "castor", "pc", "directlingam"]
+    main_rows = ["method", "dagma", "cdnod", "castor", "directlingam"]
     L = [r"\begin{tabular}{l" + "c" * len(cols) + "}", r"\toprule", "Method & " + " & ".join(CELL_TEX[c] for c in cols) + r" \\", r"\midrule"]
     numbers["table1"] = {}
     for k in main_rows:
@@ -384,8 +384,8 @@ def main():
     # ── curvature at the signal scale: tanh cells (600 held-out ids, same windows as main600) ──
     tanh = {}
     TANH_ROW = {"tanh_laplace": "tanh / Laplace", "tanh_normal": "tanh / Gaussian"}
-    L = [r"\begin{tabular}{lcccccccc}", r"\toprule",
-         r"Cell & \method{} & \makecell{CausalMorph\\as published} & \makecell{DirectLiNGAM\\alone} & DAGMA & PC & CD-NOD & $\kappa$ & ANM route \\", r"\midrule"]
+    L = [r"\begin{tabular}{lccccccc}", r"\toprule",
+         r"Cell & \method{} & \makecell{CausalMorph\\as published} & \makecell{DirectLiNGAM\\alone} & DAGMA & CD-NOD & $\kappa$ & ANM route \\", r"\midrule"]
     for c in TANH_ROW:
         m = load(c, "main600")
         if m is None:
@@ -400,7 +400,7 @@ def main():
         tanh[c]["routing"] = {"curvature": float(m.mean_curvature.mean()), "gate": float(m.mean_gate_share.mean()),
                               "anm": float(m.n_stage0_windows.sum() / m.n_windows_ext.sum()), "windows": int(m.n_windows_ext.sum()), "n": int(len(m))}
         r = tanh[c]
-        L.append(f"{TANH_ROW[c]} & " + " & ".join(f"{r[k]['mean']:.3f}" if k in r else "--" for k in ("method", "nostage0", "directlingam", "dagma", "pc", "cdnod"))
+        L.append(f"{TANH_ROW[c]} & " + " & ".join(f"{r[k]['mean']:.3f}" if k in r else "--" for k in ("method", "nostage0", "directlingam", "dagma", "cdnod"))
                  + f" & {r['routing']['curvature']:.3f} & {100 * r['routing']['anm']:.1f}\\% \\\\")
     L += [r"\bottomrule", r"\end{tabular}"]
     if tanh:
