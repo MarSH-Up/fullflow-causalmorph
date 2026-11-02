@@ -220,7 +220,7 @@ def main():
     # ── ablations (600) ──
     abl = {}
     L = [r"\begin{tabular}{l" + "c" * 4 + "}", r"\toprule", "Configuration & " + " & ".join(CELL_TEX[c] for c in CELLS) + r" \\", r"\midrule"]
-    steps = [("main600", "\\method{} (600 held-out)"), ("nostage0", "without Stage 0 (preconditioner + DirectLiNGAM), same windows"),
+    steps = [("main600", "\\method{} (600 held-out)"), ("nostage0", "CausalMorph as published (no route selection), same windows"),
              ("dl600", "without Stage 0 and without preconditioning (DirectLiNGAM alone), same windows"),
              ("oracle_seg", "with the true change points"), ("no_seg", "without segmentation"), ("L1000", "$L = 1{,}000$"), ("L2000", "$L = 2{,}000$"), ("L2500", "$L = 2{,}500$")]
     D = [r"\begin{tabular}{l" + "c" * 4 + "}", r"\toprule", "Configuration & " + " & ".join(CELL_TEX[c] for c in CELLS) + r" \\", r"\midrule"]
