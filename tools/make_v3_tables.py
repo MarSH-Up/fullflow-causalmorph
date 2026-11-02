@@ -236,7 +236,10 @@ def main():
                 cells.append("--"); diffs.append("--"); continue
             cells.append(ms(d.mean_norm_shd))
             st = paired_stats(ref.mean_norm_shd, d.mean_norm_shd) if step != "main600" else None   # method - configuration
-            abl[step][c] = {"mean": float(d.mean_norm_shd.mean()), "sd": float(d.mean_norm_shd.std(ddof=1)), "skel": float(d.mean_skeleton_f1.mean()), "stats": st}
+            raw = pd.read_csv(R(c, "main600" if step == "dl600" else step, "results.csv")).drop_duplicates("scenario_id")
+            abl[step][c] = {"mean": float(d.mean_norm_shd.mean()), "sd": float(d.mean_norm_shd.std(ddof=1)), "skel": float(d.mean_skeleton_f1.mean()), "stats": st,
+                            "n": int(len(d)), "errors": int((raw.status != "ok").sum()),
+                            "method_same": float(ref.mean_norm_shd.reindex(d.index).mean())}   # the method on the scenarios the configuration completed
             diffs.append(f"${-st['mean']:+.3f}$ [{-st['hi']:+.3f}, {-st['lo']:+.3f}]" if st else "--")   # configuration - method
         L.append(lab + " & " + " & ".join(cells) + r" \\")
         if step != "main600":
@@ -245,6 +248,26 @@ def main():
     open(os.path.join(a.tex_dir, "tab_ablation_rows.tex"), "w").write("\n".join(L) + "\n")
     open(os.path.join(a.tex_dir, "tab_ablation_diff_rows.tex"), "w").write("\n".join(D) + "\n")
     numbers["ablation"] = abl
+
+    # ── Stage 0 threshold sensitivity (600, same windows as main600) ──
+    sens = {}
+    settings = [("sens_k0.02_g0.5", "0.02", "0.50"), ("sens_k0.10_g0.5", "0.10", "0.50"), ("sens_k0.05_g0.4", "0.05", "0.40"), ("sens_k0.05_g0.67", "0.05", "0.67")]
+    L = [r"\begin{tabular}{cc" + "c" * 4 + "}", r"\toprule", r"$\kappa_0$ & $g_0$ & " + " & ".join(CELL_TEX[c] for c in CELLS) + r" \\", r"\midrule"]
+    for step, k0, g0 in [("main600", "0.05", "0.50")] + settings:
+        if all(load(c, step) is None for c in CELLS):
+            continue
+        sens[step] = {"k0": float(k0), "g0": float(g0)}; cells = []
+        for c in CELLS:
+            d = load(c, step); ref = load(c, "main600")
+            if d is None:
+                cells.append("--"); continue
+            st = paired_stats(d.mean_norm_shd, ref.mean_norm_shd) if step != "main600" else None   # setting - chosen
+            sens[step][c] = {"mean": float(d.mean_norm_shd.mean()), "sd": float(d.mean_norm_shd.std(ddof=1)), "n": int(len(d)), "stats": st}
+            cells.append(f"{d.mean_norm_shd.mean():.3f}" + (f" (${st['mean']:+.3f}$)" if st else ""))
+        L.append(f"{k0} & {g0} & " + " & ".join(cells) + r" \\")
+    L += [r"\bottomrule", r"\end{tabular}"]
+    open(os.path.join(a.tex_dir, "tab_sensitivity_rows.tex"), "w").write("\n".join(L) + "\n")
+    numbers["sensitivity"] = sens
 
     # ── detection (600) ──
     det = {}
