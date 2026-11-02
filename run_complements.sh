@@ -16,6 +16,11 @@
 #                 Gaussian noise) on the 600 held-out ids: datasets generated on the fly, then the method with its
 #                 reference learners (main600), without Stage 0, CD-NOD (Fisher-z) and DAGMA tuned
 #                 -> $OUT/tanh_laplace/{main600,nostage0,cdnod_fz,dagma_tuned}, same for tanh_normal
+#   castor_cal    CASTOR's edge threshold w over CASTOR_W on CASTOR_CAL_N calibration scenarios per cell
+#                 (a seeded random sample of $CAL_IDS) -> $OUT/<cell>/castor_cal_w<10w>, then tools/pick_castor.py
+#                 writes $OUT/castor_choice.txt (lowest mean nSHD over cells, as DAGMA's choice)
+#   castor600     CASTOR with the chosen w on the 600 held-out ids of the ablations (every cell) and on the
+#                 external benchmark -> $OUT/<cell>/castor600, $OUT/external/castor_tuned
 #   castor        what run_v3.sh's castor step has not finished (Gaussian cells, external): waits until no
 #                 run_castor.py of this user is running, then resumes every cell and the external benchmark
 #                 with the same ids, window and time-out        -> $OUT/<cell>/castor, $OUT/external/castor
@@ -44,6 +49,11 @@ DET="${DET:-union}"
 FIXED_L="${FIXED_L:-500}"
 SEG=(--detector "$DET" --cut_filter rank --fixed_min_regime_len "$FIXED_L")
 CASTOR_TIMEOUT="${CASTOR_TIMEOUT:-1800}"
+CAL_IDS="${CAL_IDS:-results/hardening_validation/sample_ids.txt}"   # the 600 calibration scenarios per cell
+CASTOR_W="${CASTOR_W:-0.1 0.2 0.3 0.4}"
+CASTOR_CAL_N="${CASTOR_CAL_N:-60}"
+CASTOR_CAL_IDS="$OUT/castor_cal_ids.txt"
+wtag () { "$PYTHON" -c "print(int(round(float('$1') * 10)))"; }   # 0.2 -> 2: directory castor_cal_w2
 IDS="$REF/kci_ids.txt"
 CASTOR_IDS="$OUT/castor_ids.txt"
 [ -f "$IDS" ] || { echo "missing $IDS" >&2; exit 1; }
@@ -70,6 +80,9 @@ for step in $STEPS; do
     tanh)        for c in $TANH_CELLS; do for st in main600 nostage0 cdnod_fz dagma_tuned; do plan "$st" "$c" "$n_held"; done; done ;;
     castor)      [ -f "$CASTOR_IDS" ] || { echo "missing $CASTOR_IDS" >&2; exit 1; }
                  for c in $CELLS; do plan castor "$c" "$(grep -c . "$CASTOR_IDS")"; done; plan castor external "$n_ext" ;;
+    castor_cal)  [ -f "$CAL_IDS" ] || { echo "missing $CAL_IDS" >&2; exit 1; }
+                 for w in $CASTOR_W; do for c in $CELLS; do plan "castor_cal_w$(wtag "$w")" "$c" "$CASTOR_CAL_N"; done; done ;;
+    castor600)   for c in $CELLS; do plan castor600 "$c" "$n_held"; done; plan castor_tuned external "$n_ext" ;;
     *) echo "unknown step '$step'" >&2; exit 1 ;;
   esac
 done
@@ -136,6 +149,33 @@ for step in $STEPS; do
       done
       run "external/castor" "$OUT/external/castor" "$n_ext" "$PYTHON" -u tools/run_castor.py --dataset_dir "$EXT" --output_dir "$OUT/external/castor" \
           --window "$FIXED_L" --timeout "$CASTOR_TIMEOUT" --permute_variables --workers "$WORKERS" --resume ;;
+    castor_cal)
+      [ -d third_party/CASTOR ] || { echo "missing third_party/CASTOR (run_v3.sh clones it)" >&2; exit 1; }
+      [ -f "$CASTOR_CAL_IDS" ] || "$PYTHON" - "$CAL_IDS" "$CASTOR_CAL_N" > "$CASTOR_CAL_IDS" <<'PY'
+import random, sys
+ids = [l.strip() for l in open(sys.argv[1]) if l.strip()]
+random.Random(0).shuffle(ids)          # a seeded random sample, not every k-th id of the sorted list
+print("\n".join(sorted(ids[:int(sys.argv[2])])))
+PY
+      for w in $CASTOR_W; do
+        for c in $CELLS; do
+          run "$c/castor_cal_w$(wtag "$w")" "$OUT/$c/castor_cal_w$(wtag "$w")" "$CASTOR_CAL_N" "$PYTHON" -u tools/run_castor.py --dataset_dir "$(dataset_for "$c")" \
+              --output_dir "$OUT/$c/castor_cal_w$(wtag "$w")" --scenario_ids_file "$CASTOR_CAL_IDS" --window "$FIXED_L" --timeout "$CASTOR_TIMEOUT" \
+              --w_threshold "$w" --permute_variables --workers "$WORKERS" --resume
+        done
+      done
+      "$PYTHON" tools/pick_castor.py "$OUT" $CELLS > "$OUT/castor_choice.txt" 2> "$OUT/castor_cal_table.txt"
+      echo "   CASTOR threshold chosen on the calibration sample: w = $(tail -1 "$OUT/castor_choice.txt")"; cat "$OUT/castor_cal_table.txt" ;;
+    castor600)
+      [ -d third_party/CASTOR ] || { echo "missing third_party/CASTOR (run_v3.sh clones it)" >&2; exit 1; }
+      [ -f "$OUT/castor_choice.txt" ] || { echo "missing $OUT/castor_choice.txt (run STEPS=castor_cal first)" >&2; exit 1; }
+      w="$(tail -1 "$OUT/castor_choice.txt")"
+      for c in $CELLS; do
+        run "$c/castor600" "$OUT/$c/castor600" "$n_held" "$PYTHON" -u tools/run_castor.py --dataset_dir "$(dataset_for "$c")" --output_dir "$OUT/$c/castor600" \
+            --scenario_ids_file "$IDS" --window "$FIXED_L" --timeout "$CASTOR_TIMEOUT" --w_threshold "$w" --permute_variables --workers "$WORKERS" --resume
+      done
+      run "external/castor_tuned" "$OUT/external/castor_tuned" "$n_ext" "$PYTHON" -u tools/run_castor.py --dataset_dir "$EXT" --output_dir "$OUT/external/castor_tuned" \
+          --window "$FIXED_L" --timeout "$CASTOR_TIMEOUT" --w_threshold "$w" --permute_variables --workers "$WORKERS" --resume ;;
   esac
 done
 echo "COMPLEMENTS DONE  $(date '+%F %H:%M')"
