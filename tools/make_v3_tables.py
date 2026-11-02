@@ -381,6 +381,32 @@ def main():
     L += [r"\bottomrule", r"\end{tabular}"]
     open(os.path.join(a.tex_dir, "tab_castor_rows.tex"), "w").write("\n".join(L) + "\n")
 
+    # ── curvature at the signal scale: tanh cells (600 held-out ids, same windows as main600) ──
+    tanh = {}
+    TANH_ROW = {"tanh_laplace": "tanh / Laplace", "tanh_normal": "tanh / Gaussian"}
+    L = [r"\begin{tabular}{lcccccccc}", r"\toprule",
+         r"Cell & \method{} & \makecell{CausalMorph\\as published} & \makecell{DirectLiNGAM\\alone} & DAGMA & PC & CD-NOD & $\kappa$ & ANM route \\", r"\midrule"]
+    for c in TANH_ROW:
+        m = load(c, "main600")
+        if m is None:
+            continue
+        ns = load(c, "nostage0"); cd = load(c, "cdnod_fz"); tuned = load(c, "dagma_tuned")
+        name = next((k[:-len("_mean_norm_shd")] for k in tuned if k.startswith("dagma_l") and k.endswith("_mean_norm_shd")), None) if tuned is not None else None
+        rows = {"method": m.mean_norm_shd, "nostage0": col(ns, "mean_norm_shd"), "directlingam": m.directlingam_mean_norm_shd,
+                "dagma": tuned[f"{name}_mean_norm_shd"] if name else None, "pc": m.pc_mean_norm_shd, "cdnod": col(cd, "mean_norm_shd")}
+        tanh[c] = {k: {"mean": float(v.mean()), "sd": float(v.std(ddof=1)), "skel": None, "stats": paired_stats(rows["method"], v) if k != "method" else None}
+                   for k, v in rows.items() if v is not None}
+        tanh[c]["method"]["skel"] = float(m.mean_skeleton_f1.mean()); tanh[c]["pc"]["skel"] = float(m.pc_mean_skeleton_f1.mean())
+        tanh[c]["routing"] = {"curvature": float(m.mean_curvature.mean()), "gate": float(m.mean_gate_share.mean()),
+                              "anm": float(m.n_stage0_windows.sum() / m.n_windows_ext.sum()), "windows": int(m.n_windows_ext.sum()), "n": int(len(m))}
+        r = tanh[c]
+        L.append(f"{TANH_ROW[c]} & " + " & ".join(f"{r[k]['mean']:.3f}" if k in r else "--" for k in ("method", "nostage0", "directlingam", "dagma", "pc", "cdnod"))
+                 + f" & {r['routing']['curvature']:.3f} & {100 * r['routing']['anm']:.1f}\\% \\\\")
+    L += [r"\bottomrule", r"\end{tabular}"]
+    if tanh:
+        open(os.path.join(a.tex_dir, "tab_tanh_rows.tex"), "w").write("\n".join(L) + "\n")
+    numbers["tanh"] = tanh
+
     json.dump(numbers, open(os.path.join(a.tex_dir, "numbers.json"), "w"), indent=1, default=float)
     print("tables written to", a.tex_dir)
     print(json.dumps({k: numbers["table1"][k] for k in numbers["table1"]}, indent=0)[:3000])
