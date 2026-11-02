@@ -37,12 +37,12 @@ STEPS="${STEPS:-diagnostics dagma_ext L_large castor}"
 SENS="${SENS:-0.02,0.5 0.10,0.5 0.05,0.4 0.05,0.67}"
 TANH_CELLS="${TANH_CELLS:-tanh_laplace tanh_normal}"
 LEARNERS="directlingam,icalingam,dagma_paper,sortnregress,randomregress,empty,pc"
-SEG=(--detector "$DET" --cut_filter rank --fixed_min_regime_len "$FIXED_L")
 tanh_flags () { case "$1" in tanh_laplace) echo "--mechanism nonlinear --nonlinearity 0.7 --nonlin_func tanh_unit --noise_dist laplace" ;;
                               tanh_normal)  echo "--mechanism nonlinear --nonlinearity 0.7 --nonlin_func tanh_unit --noise_dist normal" ;; esac; }
 DATA_PREFIX="${DATA_PREFIX:-datasets_full_}"
 DET="${DET:-union}"
 FIXED_L="${FIXED_L:-500}"
+SEG=(--detector "$DET" --cut_filter rank --fixed_min_regime_len "$FIXED_L")
 CASTOR_TIMEOUT="${CASTOR_TIMEOUT:-1800}"
 IDS="$REF/kci_ids.txt"
 CASTOR_IDS="$OUT/castor_ids.txt"
